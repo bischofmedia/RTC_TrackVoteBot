@@ -199,6 +199,7 @@ async def startup_check():
     if start_date <= today <= end_date:
         print("[INFO] Abstimmung ist aktiv – Channel wird sichtbar geschaltet.")
         await set_channel_visibility(guild, True)
+        await asyncio.sleep(2)
         # Prüfe ob bereits eine Welcome-Nachricht existiert
         channel = guild.get_channel(VOTING_CHANNEL_ID)
         if channel:
