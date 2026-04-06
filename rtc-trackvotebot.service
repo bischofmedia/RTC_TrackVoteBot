@@ -1,0 +1,15 @@
+[Unit]
+Description=RTC TrackVoteBot
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/RTC_TrackVoteBot
+ExecStart=/opt/RTC_TrackVoteBot/venv/bin/python bot.py
+Restart=on-failure
+RestartSec=10
+EnvironmentFile=/opt/RTC_TrackVoteBot/.env
+
+[Install]
+WantedBy=multi-user.target
