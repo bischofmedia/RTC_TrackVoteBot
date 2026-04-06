@@ -65,19 +65,23 @@ async def set_channel_visibility(guild: discord.Guild, visible: bool):
     if not channel:
         return
 
+    # Im Testmodus Orga-Rolle nicht anfassen (höherrangig als Bot)
+    if TEST_MODE:
+        print(f"[INFO] [TESTMODUS] Channel-Sichtbarkeit wird nicht geändert (Orga hat dauerhaft Zugriff).")
+        return
+
     role_name = get_active_role_name()
     role = discord.utils.get(guild.roles, name=role_name)
     if not role:
         print(f"[WARN] Rolle '{role_name}' nicht gefunden.")
         return
 
-    mode_label = "[TESTMODUS] " if TEST_MODE else ""
     if visible:
         await channel.set_permissions(role, view_channel=True, send_messages=False)
-        print(f"[INFO] {mode_label}Voting-Channel ist jetzt sichtbar für Rolle '{role_name}'.")
+        print(f"[INFO] Voting-Channel ist jetzt sichtbar für Rolle '{role_name}'.")
     else:
         await channel.set_permissions(role, view_channel=False)
-        print(f"[INFO] {mode_label}Voting-Channel ist jetzt unsichtbar für Rolle '{role_name}'.")
+        print(f"[INFO] Voting-Channel ist jetzt unsichtbar für Rolle '{role_name}'.")
 
 
 async def post_welcome_message(guild: discord.Guild, end_date: date):
@@ -181,6 +185,8 @@ async def on_ready():
 
     daily_check.start()
 
+    # Kurz warten bis Discord-Cache vollständig geladen ist
+    await asyncio.sleep(5)
     # Sofort-Check beim Start (falls Bot neu gestartet wurde während Abstimmung läuft)
     await startup_check()
 
