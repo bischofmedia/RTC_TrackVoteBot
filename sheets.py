@@ -9,7 +9,6 @@ CREDENTIALS_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
 ]
 
 # Farbe Rot für nicht gefundene Fahrer
@@ -21,7 +20,9 @@ RED_TEXT = {
 
 def get_client():
     creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
-    return gspread.authorize(creds)
+    client = gspread.Client(auth=creds)
+    client.set_timeout(30)
+    return client
 
 
 def get_voting_dates() -> tuple[date, date]:
