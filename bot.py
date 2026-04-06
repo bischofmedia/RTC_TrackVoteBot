@@ -87,9 +87,11 @@ async def set_channel_visibility(guild: discord.Guild, visible: bool):
 async def post_welcome_message(guild: discord.Guild, end_date: date):
     channel = guild.get_channel(VOTING_CHANNEL_ID)
     if not channel:
+        print(f"[ERROR] Channel {VOTING_CHANNEL_ID} nicht gefunden!")
         return
-    # Lösche alte Nachrichten des Bots im Channel
     perms = channel.permissions_for(guild.me)
+    print(f"[DEBUG] Channel: {channel.name}, send_messages: {perms.send_messages}, view_channel: {perms.view_channel}")
+    # Lösche alte Nachrichten des Bots im Channel
     if perms.read_message_history:
         async for msg in channel.history(limit=50):
             if msg.author == bot.user:
@@ -212,10 +214,12 @@ async def startup_check():
         channel = guild.get_channel(VOTING_CHANNEL_ID)
         if channel:
             has_welcome = False
-            async for msg in channel.history(limit=10):
-                if msg.author == bot.user and msg.embeds:
-                    has_welcome = True
-                    break
+            perms = channel.permissions_for(guild.me)
+            if perms.read_message_history:
+                async for msg in channel.history(limit=10):
+                    if msg.author == bot.user and msg.embeds:
+                        has_welcome = True
+                        break
             if not has_welcome:
                 await post_welcome_message(guild, end_date)
     else:
