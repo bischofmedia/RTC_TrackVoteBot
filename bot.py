@@ -85,9 +85,11 @@ async def post_welcome_message(guild: discord.Guild, end_date: date):
     if not channel:
         return
     # Lösche alte Nachrichten des Bots im Channel
-    async for msg in channel.history(limit=50):
-        if msg.author == bot.user:
-            await msg.delete()
+    perms = channel.permissions_for(guild.me)
+    if perms.read_message_history:
+        async for msg in channel.history(limit=50):
+            if msg.author == bot.user:
+                await msg.delete()
     embed = get_welcome_embed(end_date)
     view = WelcomeView()
     await channel.send(embed=embed, view=view)
