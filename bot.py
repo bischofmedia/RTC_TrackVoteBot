@@ -5,11 +5,11 @@ import asyncio
 from datetime import datetime, date
 import os
 from dotenv import load_dotenv
-import sheets
-import tracks
 
 load_dotenv()
 
+import sheets
+import tracks
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 VOTING_CHANNEL_ID = int(os.getenv("VOTING_CHANNEL_ID"))
 ANNOUNCE_CHANNEL_ID = int(os.getenv("ANNOUNCE_CHANNEL_ID"))
