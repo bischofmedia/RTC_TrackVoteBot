@@ -243,6 +243,18 @@ class WelcomeView(discord.ui.View):
     )
     async def vote_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
+
+        # Nickname ermitteln und sofort Begrüßung schicken
+        member = interaction.guild.get_member(interaction.user.id)
+        nickname = member.display_name if member else interaction.user.name
+        await interaction.followup.send(
+            f"👋 Hallo **{nickname}**, ich lade die Strecken – deine Streckenwahl startet in Kürze!\n\n"
+            f"Bitte wähle aus technischen Gründen erst den **Kontinent**, dann die **Strecke**, "
+            f"und falls vorhanden eine **Streckenvariante**.\n"
+            f"Du kannst deine Auswahl jederzeit wieder ändern, solange die Abstimmung läuft.",
+            ephemeral=True,
+        )
+
         # Prüfe ob Abstimmung noch läuft
         try:
             start_date, end_date = sheets.get_voting_dates()
@@ -259,21 +271,8 @@ class WelcomeView(discord.ui.View):
             )
             return
 
-        # Nickname ermitteln
-        member = interaction.guild.get_member(interaction.user.id)
-        nickname = member.display_name if member else interaction.user.name
-
-        # Ladeanzeige
-        await interaction.followup.send(
-            f"👋 Hallo **{nickname}**, ich lade die Strecken – deine Streckenwahl startet in Kürze!\n\n"
-            f"Bitte wähle aus technischen Gründen erst den **Kontinent**, dann die **Strecke**, "
-            f"und falls vorhanden eine **Streckenvariante**.\n"
-            f"Du kannst deine Auswahl jederzeit wieder ändern, solange die Abstimmung läuft.",
-            ephemeral=True,
-        )
-
         # Starte Voting-Flow für Wunsch 1
-        view = ContinentSelectView(wish_number=1, existing_wishes={})
+        view = ContinentSelectView(wish_number=1, existing_wishes={}, user=interaction.user)
         await interaction.followup.send(
             embed=wish_embed(1), view=view, ephemeral=True
         )
@@ -469,16 +468,8 @@ async def finalize_wish(interaction: discord.Interaction, wish_number: int, full
 
     existing_wishes[wish_number] = full_track
 
-    # Nach jedem Wunsch sofort ins Sheet speichern (auch unvollständig)
-    try:
-        await asyncio.get_event_loop().run_in_executor(
-            None, sheets.write_votes, interaction.user, existing_wishes
-        )
-    except Exception as e:
-        print(f"[ERROR] Zwischenspeichern fehlgeschlagen: {e}")
-
     if wish_number < 3:
-        # Nächster Wunsch
+        # Nächster Wunsch — erst Discord antworten, dann Sheet speichern
         view = ContinentSelectView(
             wish_number=wish_number + 1,
             existing_wishes=existing_wishes,
@@ -493,6 +484,14 @@ async def finalize_wish(interaction: discord.Interaction, wish_number: int, full
         await interaction.response.edit_message(
             embed=result_embed(existing_wishes), view=view
         )
+
+    # Sheet im Hintergrund speichern (nach Discord-Antwort)
+    try:
+        await asyncio.get_event_loop().run_in_executor(
+            None, sheets.write_votes, interaction.user, existing_wishes
+        )
+    except Exception as e:
+        print(f"[ERROR] Zwischenspeichern fehlgeschlagen: {e}")
 
 
 class ResumeView(discord.ui.View):
