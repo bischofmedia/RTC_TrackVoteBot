@@ -71,10 +71,7 @@ def get_tracks_from_sheet() -> list[dict]:
         if name in excluded:
             continue
         if code:
-            try:
-                result.append({"name": name, "code": int(code)})
-            except ValueError:
-                result.append({"name": name, "code": None})
+            result.append({"name": name, "code": code.strip().upper()})
         else:
             result.append({"name": name, "code": None})
     return result

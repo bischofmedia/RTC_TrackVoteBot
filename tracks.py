@@ -4,13 +4,13 @@ from functools import lru_cache
 import sheets
 
 # Kontinent-Mapping aus ENV
-def _parse_codes(env_key: str) -> set[int]:
+def _parse_codes(env_key: str) -> set[str]:
     raw = os.getenv(env_key, "")
     result = set()
     for part in raw.split(","):
-        part = part.strip()
-        if part.isdigit():
-            result.add(int(part))
+        part = part.strip().upper()
+        if part:
+            result.add(part)
     return result
 
 
