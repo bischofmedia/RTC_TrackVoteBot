@@ -278,7 +278,7 @@ class WelcomeView(discord.ui.View):
         )
 
 
-def wish_embed(wish_number: int, selected: dict = None) -> discord.Embed:
+def wish_embed(wish_number: int, selected: dict = None, show_footer: bool = True) -> discord.Embed:
     titles = {1: "Erster Wunsch", 2: "Zweiter Wunsch", 3: "Dritter Wunsch"}
     embed = discord.Embed(
         title=f"🏎️ Schritt {wish_number}/3 – {titles[wish_number]}",
@@ -288,17 +288,15 @@ def wish_embed(wish_number: int, selected: dict = None) -> discord.Embed:
         embed.add_field(name="Bereits gewählt", value="\n".join(
             [f"{i}. {t}" for i, t in selected.items()]
         ), inline=False)
-    embed.set_footer(text="Wähle zuerst den Kontinent, dann die Strecke.")
+    if show_footer:
+        embed.set_footer(text="Wähle zuerst den Kontinent, dann die Strecke.")
     return embed
 
 
 def result_embed(wishes: dict) -> discord.Embed:
     embed = discord.Embed(
         title="✅ Deine Streckenauswahl",
-        description=(
-            "Deine Wünsche wurden eingetragen. Du kannst sie jederzeit ändern, solange die Abstimmung läuft.\n\n"
-            "✏️ *Klicke auf eine der Strecken unten, um deine Wahl noch einmal zu ändern.*"
-        ),
+        description="Deine Wünsche wurden eingetragen. Du kannst sie jederzeit ändern, solange die Abstimmung läuft.",
         color=discord.Color.green(),
     )
     for i, track in wishes.items():
@@ -363,7 +361,7 @@ class ContinentSelect(discord.ui.Select):
             track_list=track_list,
             existing_wishes=self.existing_wishes,
         )
-        embed = wish_embed(self.wish_number, self.existing_wishes)
+        embed = wish_embed(self.wish_number, self.existing_wishes, show_footer=False)
         embed.add_field(
             name=f"Kontinent: {continent_label}",
             value=f"Folgende Strecken aus **{continent_label}** können gewählt werden:",
@@ -425,7 +423,7 @@ class TrackSelect(discord.ui.Select):
                 variants=variants,
                 existing_wishes=self.existing_wishes,
             )
-            embed = wish_embed(self.wish_number, self.existing_wishes)
+            embed = wish_embed(self.wish_number, self.existing_wishes, show_footer=False)
             embed.add_field(
                 name=f"Strecke: ***{selected_track}***",
                 value=f"Für den Track ***{selected_track}*** stehen mehrere Varianten zur Wahl:",
@@ -500,14 +498,20 @@ async def finalize_wish(interaction: discord.Interaction, wish_number: int, full
     else:
         # Alle 3 Wünsche gesetzt → Ergebnisansicht
         view = ResultView(wishes=existing_wishes)
+        member = interaction.guild.get_member(interaction.user.id) if interaction.guild else None
+        nickname = member.display_name if member else None
         await interaction.edit_original_response(
-            embed=result_embed(existing_wishes), view=view
+            content="⬇️ *Klicke auf einen der Buttons unten, um eine Strecke zu ändern.*",
+            embed=result_embed(existing_wishes),
+            view=view,
         )
 
     # Sheet im Hintergrund speichern (nach Discord-Antwort)
     try:
+        member = interaction.guild.get_member(interaction.user.id) if interaction.guild else None
+        nickname = member.display_name if member else None
         await asyncio.get_event_loop().run_in_executor(
-            None, sheets.write_votes, interaction.user, existing_wishes
+            None, sheets.write_votes, interaction.user, existing_wishes, nickname
         )
     except Exception as e:
         print(f"[ERROR] Zwischenspeichern fehlgeschlagen: {e}")
@@ -545,7 +549,9 @@ class ResumeView(discord.ui.View):
             # Alle 3 sind bereits vollständig
             view = ResultView(wishes=current_wishes)
             await interaction.edit_original_response(
-                embed=result_embed(current_wishes), view=view
+                content="⬇️ *Klicke auf einen der Buttons unten, um eine Strecke zu ändern.*",
+                embed=result_embed(current_wishes),
+                view=view,
             )
         else:
             view = ContinentSelectView(

@@ -86,7 +86,7 @@ def find_existing_vote_row(ws, name: str) -> int | None:
     return None
 
 
-def write_votes(user: discord.User, wishes: dict):
+def write_votes(user: discord.User, wishes: dict, nickname: str | None = None):
     """Schreibt oder überschreibt die Votes eines Fahrers."""
     gc = get_client()
     sh = gc.open_by_key(GOOGLE_SHEETS_ID)
@@ -95,7 +95,12 @@ def write_votes(user: discord.User, wishes: dict):
     discord_name = str(user.name)
     psn_name = get_psn_name(discord_name)
     name_found = psn_name is not None
-    display_name = psn_name if name_found else discord_name
+    if name_found:
+        display_name = psn_name
+    elif nickname:
+        display_name = nickname
+    else:
+        display_name = discord_name
 
     track1 = wishes.get(1, "")
     track2 = wishes.get(2, "")
