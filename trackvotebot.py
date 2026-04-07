@@ -411,6 +411,7 @@ class TrackSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         selected_track = self.values[0]
         variants = tracks.get_variants(selected_track)
 
@@ -430,7 +431,7 @@ class TrackSelect(discord.ui.Select):
                 value=f"Für den Track ***{selected_track}*** stehen mehrere Varianten zur Wahl:",
                 inline=False,
             )
-            await interaction.response.edit_message(embed=embed, view=view)
+            await interaction.edit_original_response(embed=embed, view=view)
 
 
 class VariantSelectView(discord.ui.View):
@@ -471,6 +472,7 @@ class VariantSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         selected_variant = self.values[0]
         await finalize_wish(interaction, self.wish_number, selected_variant, self.existing_wishes)
 
@@ -478,7 +480,7 @@ class VariantSelect(discord.ui.Select):
 async def finalize_wish(interaction: discord.Interaction, wish_number: int, full_track: str, existing_wishes: dict):
     # Doppelungs-Check
     if full_track in existing_wishes.values():
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"⚠️ **{full_track}** hast du bereits gewählt. Bitte wähle eine andere Strecke.",
             ephemeral=True,
         )
@@ -487,19 +489,18 @@ async def finalize_wish(interaction: discord.Interaction, wish_number: int, full
     existing_wishes[wish_number] = full_track
 
     if wish_number < 3:
-        # Nächster Wunsch — erst Discord antworten, dann Sheet speichern
         view = ContinentSelectView(
             wish_number=wish_number + 1,
             existing_wishes=existing_wishes,
             user=interaction.user,
         )
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=wish_embed(wish_number + 1, existing_wishes), view=view
         )
     else:
         # Alle 3 Wünsche gesetzt → Ergebnisansicht
         view = ResultView(wishes=existing_wishes)
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=result_embed(existing_wishes), view=view
         )
 
