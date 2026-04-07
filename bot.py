@@ -242,25 +242,26 @@ class WelcomeView(discord.ui.View):
         custom_id="welcome_vote_button",
     )
     async def vote_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
         # Prüfe ob Abstimmung noch läuft
         try:
             start_date, end_date = sheets.get_voting_dates()
         except Exception:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Fehler beim Lesen der Abstimmungsdaten.", ephemeral=True
             )
             return
 
         today = date.today()
         if not (start_date <= today <= end_date):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Die Abstimmung ist aktuell nicht aktiv.", ephemeral=True
             )
             return
 
         # Starte Voting-Flow für Wunsch 1
         view = ContinentSelectView(wish_number=1, existing_wishes={})
-        await interaction.response.send_message(
+        await interaction.followup.send(
             embed=wish_embed(1), view=view, ephemeral=True
         )
 
@@ -314,6 +315,7 @@ class ContinentSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         continent = self.values[0]
         track_list = tracks.get_tracks_by_continent(continent)
 
@@ -323,7 +325,7 @@ class ContinentSelect(discord.ui.Select):
             track_list=track_list,
             existing_wishes=self.existing_wishes,
         )
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=wish_embed(self.wish_number, self.existing_wishes), view=view
         )
 
