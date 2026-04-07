@@ -412,20 +412,21 @@ async def finalize_wish(interaction: discord.Interaction, wish_number: int, full
             embed=wish_embed(wish_number + 1, existing_wishes), view=view
         )
     else:
-        # Alle 3 Wünsche gesetzt → ins Sheet schreiben
-        try:
-            sheets.write_votes(interaction.user, existing_wishes)
-        except Exception as e:
-            await interaction.response.edit_message(
-                content=f"❌ Fehler beim Speichern: {e}", embed=None, view=None
-            )
-            return
-
-        # Ergebnis-Ansicht mit Ändern-Buttons
+        # Alle 3 Wünsche gesetzt → erst Discord antworten, dann Sheet schreiben
         view = ResultView(wishes=existing_wishes)
         await interaction.response.edit_message(
             embed=result_embed(existing_wishes), view=view
         )
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None, sheets.write_votes, interaction.user, existing_wishes
+            )
+        except Exception as e:
+            print(f"[ERROR] Sheet-Schreiben fehlgeschlagen: {e}")
+            await interaction.followup.send(
+                f"⚠️ Deine Auswahl wurde angezeigt, aber das Speichern ins Sheet ist fehlgeschlagen: {e}",
+                ephemeral=True,
+            )
 
 
 class ResultView(discord.ui.View):
