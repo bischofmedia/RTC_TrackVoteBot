@@ -259,6 +259,19 @@ class WelcomeView(discord.ui.View):
             )
             return
 
+        # Nickname ermitteln
+        member = interaction.guild.get_member(interaction.user.id)
+        nickname = member.display_name if member else interaction.user.name
+
+        # Ladeanzeige
+        await interaction.followup.send(
+            f"👋 Hallo **{nickname}**, ich lade die Strecken – deine Streckenwahl startet in Kürze!\n\n"
+            f"Bitte wähle aus technischen Gründen erst den **Kontinent**, dann die **Strecke**, "
+            f"und falls vorhanden eine **Streckenvariante**.\n"
+            f"Du kannst deine Auswahl jederzeit wieder ändern, solange die Abstimmung läuft.",
+            ephemeral=True,
+        )
+
         # Starte Voting-Flow für Wunsch 1
         view = ContinentSelectView(wish_number=1, existing_wishes={})
         await interaction.followup.send(
@@ -283,7 +296,7 @@ def wish_embed(wish_number: int, selected: dict = None) -> discord.Embed:
 def result_embed(wishes: dict) -> discord.Embed:
     embed = discord.Embed(
         title="✅ Deine Streckenauswahl",
-        description="Deine Wünsche wurden eingetragen. Du kannst sie jederzeit ändern.",
+        description="Deine Wünsche wurden eingetragen. Du kannst sie jederzeit ändern, solange die Abstimmung läuft.",
         color=discord.Color.green(),
     )
     for i, track in wishes.items():
@@ -292,11 +305,27 @@ def result_embed(wishes: dict) -> discord.Embed:
 
 
 class ContinentSelectView(discord.ui.View):
-    def __init__(self, wish_number: int, existing_wishes: dict):
+    def __init__(self, wish_number: int, existing_wishes: dict, user=None):
         super().__init__(timeout=300)
         self.wish_number = wish_number
         self.existing_wishes = existing_wishes
+        self.user = user
         self.add_item(ContinentSelect(wish_number, existing_wishes))
+
+    async def on_timeout(self):
+        view = ResumeView(user=self.user)
+        try:
+            await self.message.edit(
+                content=(
+                    "⏸️ **Kein Problem – nimm dir Zeit!**\n"
+                    "Deine bisherige Auswahl wurde gespeichert. "
+                    "Klicke auf den Button, um dort weiterzumachen, wo du aufgehört hast."
+                ),
+                embed=None,
+                view=view,
+            )
+        except Exception:
+            pass
 
 
 class ContinentSelect(discord.ui.Select):
@@ -331,9 +360,26 @@ class ContinentSelect(discord.ui.Select):
 
 
 class TrackSelectView(discord.ui.View):
-    def __init__(self, wish_number, continent, track_list, existing_wishes):
+    def __init__(self, wish_number, continent, track_list, existing_wishes, user=None):
         super().__init__(timeout=300)
+        self.user = user
+        self.existing_wishes = existing_wishes
         self.add_item(TrackSelect(wish_number, continent, track_list, existing_wishes))
+
+    async def on_timeout(self):
+        view = ResumeView(user=self.user)
+        try:
+            await self.message.edit(
+                content=(
+                    "⏸️ **Kein Problem – nimm dir Zeit!**\n"
+                    "Deine bisherige Auswahl wurde gespeichert. "
+                    "Klicke auf den Button, um dort weiterzumachen, wo du aufgehört hast."
+                ),
+                embed=None,
+                view=view,
+            )
+        except Exception:
+            pass
 
 
 class TrackSelect(discord.ui.Select):
@@ -355,7 +401,6 @@ class TrackSelect(discord.ui.Select):
         variants = tracks.get_variants(selected_track)
 
         if len(variants) <= 1:
-            # Keine Variantenauswahl nötig
             full_name = variants[0] if variants else selected_track
             await finalize_wish(interaction, self.wish_number, full_name, self.existing_wishes)
         else:
@@ -372,9 +417,26 @@ class TrackSelect(discord.ui.Select):
 
 
 class VariantSelectView(discord.ui.View):
-    def __init__(self, wish_number, track_name, variants, existing_wishes):
+    def __init__(self, wish_number, track_name, variants, existing_wishes, user=None):
         super().__init__(timeout=300)
+        self.user = user
+        self.existing_wishes = existing_wishes
         self.add_item(VariantSelect(wish_number, track_name, variants, existing_wishes))
+
+    async def on_timeout(self):
+        view = ResumeView(user=self.user)
+        try:
+            await self.message.edit(
+                content=(
+                    "⏸️ **Kein Problem – nimm dir Zeit!**\n"
+                    "Deine bisherige Auswahl wurde gespeichert. "
+                    "Klicke auf den Button, um dort weiterzumachen, wo du aufgehört hast."
+                ),
+                embed=None,
+                view=view,
+            )
+        except Exception:
+            pass
 
 
 class VariantSelect(discord.ui.Select):
@@ -407,34 +469,80 @@ async def finalize_wish(interaction: discord.Interaction, wish_number: int, full
 
     existing_wishes[wish_number] = full_track
 
+    # Nach jedem Wunsch sofort ins Sheet speichern (auch unvollständig)
+    try:
+        await asyncio.get_event_loop().run_in_executor(
+            None, sheets.write_votes, interaction.user, existing_wishes
+        )
+    except Exception as e:
+        print(f"[ERROR] Zwischenspeichern fehlgeschlagen: {e}")
+
     if wish_number < 3:
         # Nächster Wunsch
-        view = ContinentSelectView(wish_number=wish_number + 1, existing_wishes=existing_wishes)
+        view = ContinentSelectView(
+            wish_number=wish_number + 1,
+            existing_wishes=existing_wishes,
+            user=interaction.user,
+        )
         await interaction.response.edit_message(
             embed=wish_embed(wish_number + 1, existing_wishes), view=view
         )
     else:
-        # Alle 3 Wünsche gesetzt → erst Discord antworten, dann Sheet schreiben
+        # Alle 3 Wünsche gesetzt → Ergebnisansicht
         view = ResultView(wishes=existing_wishes)
         await interaction.response.edit_message(
             embed=result_embed(existing_wishes), view=view
         )
+
+
+class ResumeView(discord.ui.View):
+    def __init__(self, user=None):
+        super().__init__(timeout=None)
+        self.user = user
+
+    @discord.ui.button(
+        label="Abstimmung fortsetzen",
+        style=discord.ButtonStyle.primary,
+        emoji="▶️",
+        custom_id="resume_vote_button",
+    )
+    async def resume_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        # Aktuellen Stand aus Sheet laden
         try:
-            await asyncio.get_event_loop().run_in_executor(
-                None, sheets.write_votes, interaction.user, existing_wishes
+            current_wishes = await asyncio.get_event_loop().run_in_executor(
+                None, sheets.read_votes, interaction.user
             )
-        except Exception as e:
-            print(f"[ERROR] Sheet-Schreiben fehlgeschlagen: {e}")
-            await interaction.followup.send(
-                f"⚠️ Deine Auswahl wurde angezeigt, aber das Speichern ins Sheet ist fehlgeschlagen: {e}",
-                ephemeral=True,
+        except Exception:
+            current_wishes = {}
+
+        # Nächsten fehlenden Wunsch finden
+        next_wish = None
+        for i in range(1, 4):
+            if i not in current_wishes or not current_wishes[i]:
+                next_wish = i
+                break
+
+        if next_wish is None:
+            # Alle 3 sind bereits vollständig
+            view = ResultView(wishes=current_wishes)
+            await interaction.edit_original_response(
+                embed=result_embed(current_wishes), view=view
+            )
+        else:
+            view = ContinentSelectView(
+                wish_number=next_wish,
+                existing_wishes=current_wishes,
+                user=interaction.user,
+            )
+            await interaction.edit_original_response(
+                embed=wish_embed(next_wish, current_wishes), view=view
             )
 
 
 class ResultView(discord.ui.View):
     def __init__(self, wishes: dict):
         super().__init__(timeout=None)
-        self.wishes = wishes
         for i in range(1, 4):
             self.add_item(ChangeWishButton(wish_number=i, wishes=wishes))
 
@@ -443,23 +551,32 @@ class ChangeWishButton(discord.ui.Button):
     def __init__(self, wish_number: int, wishes: dict):
         self.wish_number = wish_number
         self.wishes = wishes
+        track = wishes.get(wish_number, f"Wunsch {wish_number}")
+        label = f"✏️ {track}"[:80]
         super().__init__(
-            label="Ändern",
+            label=label,
             style=discord.ButtonStyle.secondary,
-            emoji="✏️",
-            custom_id=f"change_wish_{wish_number}_{id(wishes)}",
+            custom_id=f"change_wish_{wish_number}",
             row=wish_number - 1,
         )
 
     async def callback(self, interaction: discord.Interaction):
-        # Starte nur den Dialog für diesen einen Wunsch
-        modified_wishes = dict(self.wishes)
+        await interaction.response.defer(ephemeral=True)
+        # Wünsche frisch aus dem Sheet laden (funktioniert auch nach Bot-Neustart)
+        try:
+            current_wishes = await asyncio.get_event_loop().run_in_executor(
+                None, sheets.read_votes, interaction.user
+            )
+        except Exception:
+            current_wishes = dict(self.wishes)
+
+        existing = {k: v for k, v in current_wishes.items() if k != self.wish_number}
         view = ContinentSelectView(
             wish_number=self.wish_number,
-            existing_wishes={k: v for k, v in modified_wishes.items() if k != self.wish_number},
+            existing_wishes=existing,
         )
-        await interaction.response.edit_message(
-            embed=wish_embed(self.wish_number, {k: v for k, v in modified_wishes.items() if k != self.wish_number}),
+        await interaction.edit_original_response(
+            embed=wish_embed(self.wish_number, existing),
             view=view,
         )
 
