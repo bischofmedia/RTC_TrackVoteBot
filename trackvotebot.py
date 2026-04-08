@@ -149,6 +149,22 @@ async def set_channel_visibility(guild: discord.Guild, visible: bool):
             await orga_channel.send(TXT_ORGA_CHANNEL_CLOSE.format(role=role_name))
 
 
+async def clear_voting_channel(guild: discord.Guild):
+    """Löscht alle Bot-Nachrichten im Voting-Channel."""
+    channel = guild.get_channel(VOTING_CHANNEL_ID)
+    if not channel:
+        return
+    perms = channel.permissions_for(guild.me)
+    if not perms.read_message_history:
+        return
+    deleted = 0
+    async for msg in channel.history(limit=100):
+        if msg.author == bot.user:
+            await msg.delete()
+            deleted += 1
+    print(f"[INFO] Voting-Channel geleert ({deleted} Nachrichten gelöscht).")
+
+
 async def post_welcome_message(guild: discord.Guild, end_date: date):
     channel = guild.get_channel(VOTING_CHANNEL_ID)
     if not channel:
@@ -156,10 +172,7 @@ async def post_welcome_message(guild: discord.Guild, end_date: date):
         return
     perms = channel.permissions_for(guild.me)
     print(f"[DEBUG] Channel: {channel.name}, send_messages: {perms.send_messages}, view_channel: {perms.view_channel}")
-    if perms.read_message_history:
-        async for msg in channel.history(limit=50):
-            if msg.author == bot.user:
-                await msg.delete()
+    await clear_voting_channel(guild)
     embed = get_welcome_embed(end_date)
     view = WelcomeView()
     await channel.send(embed=embed, view=view)
@@ -207,6 +220,7 @@ async def daily_check():
         announcement_state["reminded"] = True
 
     if now > end_date and not announcement_state["ended"]:
+        await clear_voting_channel(guild)
         await set_channel_visibility(guild, False)
         if announce_channel:
             await announce_channel.send(TXT_ANNOUNCE_END.format(prefix=mode_prefix))
