@@ -2,33 +2,89 @@ import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 import asyncio
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import os
+import pytz
 from dotenv import load_dotenv
 
 load_dotenv()
 
 import sheets
 import tracks
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-VOTING_CHANNEL_ID = int(os.getenv("VOTING_CHANNEL_ID"))
-ANNOUNCE_CHANNEL_ID = int(os.getenv("ANNOUNCE_CHANNEL_ID"))
-DRIVER_ROLE_NAME = os.getenv("DRIVER_ROLE_NAME", "driver")
+
+DISCORD_TOKEN          = os.getenv("DISCORD_TOKEN")
+VOTING_CHANNEL_ID      = int(os.getenv("VOTING_CHANNEL_ID"))
+ANNOUNCE_CHANNEL_ID    = int(os.getenv("ANNOUNCE_CHANNEL_ID"))
+ORGA_CHANNEL_ID        = int(os.getenv("ORGA_CHANNEL_ID"))
+DRIVER_ROLE_NAME       = os.getenv("DRIVER_ROLE_NAME", "driver")
+ORGA_ROLE_NAME         = os.getenv("ORGA_ROLE_NAME", "orga")
+TIMEZONE               = os.getenv("TIMEZONE", "Europe/Berlin")
 
 # Testmodus
 TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"
 TEST_ANNOUNCE_CHANNEL_ID = int(os.getenv("TEST_ANNOUNCE_CHANNEL_ID", "0")) if os.getenv("TEST_ANNOUNCE_CHANNEL_ID") else None
-ORGA_ROLE_NAME = os.getenv("ORGA_ROLE_NAME", "orga")
+
+# Texte aus .env
+TXT_WELCOME_TITLE       = os.getenv("TXT_WELCOME_TITLE", "🏎️ Streckenwahl")
+TXT_WELCOME_BODY        = os.getenv("TXT_WELCOME_BODY",
+    "Willkommen zur Streckenwahl! Wählt eure drei Wunschstrecken für die nächste Saison.\n"
+    "Ihr könnt eure Auswahl jederzeit ändern.\n\n"
+    "⏳ Die Abstimmung läuft bis zum **{end_date}**.\n\n"
+    "ℹ️ Das Saisonfinale wird traditionell auf der Nordschleife ausgetragen – "
+    "Nürburgring 24h, Endurance und Nordschleife stehen daher nicht zur Auswahl.")
+TXT_VOTE_GREETING       = os.getenv("TXT_VOTE_GREETING",
+    "👋 Hallo **{nickname}**, ich lade die Strecken – deine Streckenwahl startet in Kürze!\n\n"
+    "Bitte wähle aus technischen Gründen erst den **Kontinent**, dann die **Strecke**, "
+    "und falls vorhanden eine **Streckenvariante**.\n"
+    "Du kannst deine Auswahl jederzeit wieder ändern, solange die Abstimmung läuft.")
+TXT_ANNOUNCE_START      = os.getenv("TXT_ANNOUNCE_START",
+    "{prefix}🏁 **Die Streckenwahl für die nächste Saison ist jetzt geöffnet!**\n"
+    "Gebt bis zum **{end_date}** eure drei Wunschstrecken ab.\n"
+    "Zum Abstimmungs-Channel: <#{channel_id}>")
+TXT_ANNOUNCE_REMINDER   = os.getenv("TXT_ANNOUNCE_REMINDER",
+    "{prefix}⏰ **Erinnerung:** Die Streckenwahl endet morgen!\n"
+    "Noch nicht abgestimmt? Schnell, bis 23:59 Uhr: <#{channel_id}>")
+TXT_ANNOUNCE_END        = os.getenv("TXT_ANNOUNCE_END",
+    "{prefix}🔒 **Die Streckenwahl ist abgeschlossen.**\n"
+    "Danke an alle, die abgestimmt haben! Die Ergebnisse werden in den Rennkalender der nächsten Saison einfließen.")
+TXT_ORGA_CHANNEL_OPEN   = os.getenv("TXT_ORGA_CHANNEL_OPEN",
+    "✅ Abstimmungs-Channel wurde für die Rolle **{role}** **geöffnet** (sichtbar, kein Schreiben).")
+TXT_ORGA_CHANNEL_CLOSE  = os.getenv("TXT_ORGA_CHANNEL_CLOSE",
+    "🔒 Abstimmungs-Channel wurde für die Rolle **{role}** **geschlossen** (nicht sichtbar).")
+TXT_TIMEOUT_MSG         = os.getenv("TXT_TIMEOUT_MSG",
+    "⏸️ **Kein Problem – nimm dir Zeit!**\n"
+    "Deine bisherige Auswahl wurde gespeichert. "
+    "Klicke auf den Button, um dort weiterzumachen, wo du aufgehört hast.")
+TXT_RESULT_HINT         = os.getenv("TXT_RESULT_HINT",
+    "⬇️ *Klicke auf einen der Buttons unten, um eine Strecke zu ändern.*")
+TXT_RESULT_DESC         = os.getenv("TXT_RESULT_DESC",
+    "Deine Wünsche wurden eingetragen. Du kannst sie jederzeit ändern, solange die Abstimmung läuft.")
+TXT_WISH_FOOTER         = os.getenv("TXT_WISH_FOOTER",
+    "Wähle zuerst den Kontinent, dann die Strecke.")
+
 
 def get_announce_channel_id() -> int:
-    """Gibt je nach Modus die richtige Announce-Channel-ID zurück."""
     if TEST_MODE and TEST_ANNOUNCE_CHANNEL_ID:
         return TEST_ANNOUNCE_CHANNEL_ID
     return ANNOUNCE_CHANNEL_ID
 
 def get_active_role_name() -> str:
-    """Gibt je nach Modus die Rolle zurück, die Zugriff auf den Voting-Channel hat."""
     return ORGA_ROLE_NAME if TEST_MODE else DRIVER_ROLE_NAME
+
+def local_today() -> date:
+    """Gibt das heutige Datum in der konfigurierten Zeitzone zurück."""
+    tz = pytz.timezone(TIMEZONE)
+    return datetime.now(tz).date()
+
+def local_midnight_utc() -> datetime:
+    """Gibt den nächsten Mitternacht-Zeitpunkt (Berliner Zeit) als UTC-aware datetime zurück."""
+    tz = pytz.timezone(TIMEZONE)
+    now_local = datetime.now(tz)
+    midnight_local = tz.localize(datetime(now_local.year, now_local.month, now_local.day, 0, 0, 5))
+    if now_local >= midnight_local:
+        midnight_local += timedelta(days=1)
+    return midnight_local.astimezone(pytz.utc)
+
 
 intents = discord.Intents.default()
 intents.members = True
@@ -36,7 +92,6 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Track whether announcements have already been sent today
 announcement_state = {
     "started": False,
     "reminded": False,
@@ -47,14 +102,8 @@ announcement_state = {
 
 def get_welcome_embed(end_date: date) -> discord.Embed:
     embed = discord.Embed(
-        title="🏎️ Streckenwahl",
-        description=(
-            "Willkommen zur Streckenwahl! Wählt eure drei Wunschstrecken für die nächste Saison.\n"
-            "Ihr könnt eure Auswahl jederzeit ändern.\n\n"
-            f"⏳ Die Abstimmung läuft bis zum **{end_date.strftime('%d.%m.%Y')}**.\n\n"
-            "ℹ️ Das Saisonfinale wird traditionell auf der Nordschleife ausgetragen – "
-            "Nürburgring 24h, Endurance und Nordschleife stehen daher nicht zur Auswahl."
-        ),
+        title=TXT_WELCOME_TITLE,
+        description=TXT_WELCOME_BODY.format(end_date=end_date.strftime("%d.%m.%Y")),
         color=discord.Color.blue(),
     )
     return embed
@@ -65,23 +114,39 @@ async def set_channel_visibility(guild: discord.Guild, visible: bool):
     if not channel:
         return
 
-    # Im Testmodus Orga-Rolle nicht anfassen (höherrangig als Bot)
+    orga_channel = guild.get_channel(ORGA_CHANNEL_ID)
+    role_name = get_active_role_name()
+
     if TEST_MODE:
-        print(f"[INFO] [TESTMODUS] Channel-Sichtbarkeit wird nicht geändert (Orga hat dauerhaft Zugriff).")
+        print(f"[INFO] [TESTMODUS] Channel-Sichtbarkeit wird nicht geändert.")
+        if orga_channel:
+            await orga_channel.send(
+                f"🧪 **[TESTMODUS]** Channel-Sichtbarkeit unverändert (Orga hat dauerhaft Zugriff)."
+            )
         return
 
-    role_name = get_active_role_name()
     role = discord.utils.get(guild.roles, name=role_name)
     if not role:
         print(f"[WARN] Rolle '{role_name}' nicht gefunden.")
         return
 
     if visible:
-        await channel.set_permissions(role, view_channel=True, send_messages=False)
-        print(f"[INFO] Voting-Channel ist jetzt sichtbar für Rolle '{role_name}'.")
+        # Sichtbar, aber kein Schreiben – nur Lesen + Interaktion mit Buttons/Selects
+        await channel.set_permissions(role,
+            view_channel=True,
+            send_messages=False,
+            read_messages=True,
+            read_message_history=True,
+            use_application_commands=True,
+        )
+        print(f"[INFO] Voting-Channel geöffnet für '{role_name}'.")
+        if orga_channel:
+            await orga_channel.send(TXT_ORGA_CHANNEL_OPEN.format(role=role_name))
     else:
         await channel.set_permissions(role, view_channel=False)
-        print(f"[INFO] Voting-Channel ist jetzt unsichtbar für Rolle '{role_name}'.")
+        print(f"[INFO] Voting-Channel geschlossen für '{role_name}'.")
+        if orga_channel:
+            await orga_channel.send(TXT_ORGA_CHANNEL_CLOSE.format(role=role_name))
 
 
 async def post_welcome_message(guild: discord.Guild, end_date: date):
@@ -91,7 +156,6 @@ async def post_welcome_message(guild: discord.Guild, end_date: date):
         return
     perms = channel.permissions_for(guild.me)
     print(f"[DEBUG] Channel: {channel.name}, send_messages: {perms.send_messages}, view_channel: {perms.view_channel}")
-    # Lösche alte Nachrichten des Bots im Channel
     if perms.read_message_history:
         async for msg in channel.history(limit=50):
             if msg.author == bot.user:
@@ -103,8 +167,7 @@ async def post_welcome_message(guild: discord.Guild, end_date: date):
 
 @tasks.loop(hours=24)
 async def daily_check():
-    now = date.today()
-    # Reset state bei neuem Tag
+    now = local_today()
     if announcement_state["last_check_date"] != now:
         announcement_state["last_check_date"] = now
         announcement_state["started"] = False
@@ -124,50 +187,39 @@ async def daily_check():
     announce_channel = guild.get_channel(get_announce_channel_id())
     mode_prefix = "🧪 **[TESTMODUS]** " if TEST_MODE else ""
 
-    # Abstimmung startet heute
     if now == start_date and not announcement_state["started"]:
         await set_channel_visibility(guild, True)
         await post_welcome_message(guild, end_date)
         if announce_channel:
-            await announce_channel.send(
-                f"{mode_prefix}🏁 **Die Streckenwahl für die nächste Saison ist jetzt geöffnet!**\n"
-                f"Gebt bis zum **{end_date.strftime('%d.%m.%Y')}** eure drei Wunschstrecken ab.\n"
-                f"Zum Abstimmungs-Channel: <#{VOTING_CHANNEL_ID}>"
-            )
+            await announce_channel.send(TXT_ANNOUNCE_START.format(
+                prefix=mode_prefix,
+                end_date=end_date.strftime("%d.%m.%Y"),
+                channel_id=VOTING_CHANNEL_ID,
+            ))
         announcement_state["started"] = True
 
-    # Erinnerung einen Tag vor dem Ende
-    from datetime import timedelta
     if now == end_date - timedelta(days=1) and not announcement_state["reminded"]:
         if announce_channel:
-            await announce_channel.send(
-                f"{mode_prefix}⏰ **Erinnerung:** Die Streckenwahl endet morgen!\n"
-                f"Noch nicht abgestimmt? Schnell, bis 23:59 Uhr: <#{VOTING_CHANNEL_ID}>"
-            )
+            await announce_channel.send(TXT_ANNOUNCE_REMINDER.format(
+                prefix=mode_prefix,
+                channel_id=VOTING_CHANNEL_ID,
+            ))
         announcement_state["reminded"] = True
 
-    # Abstimmung endet heute (nach Mitternacht = Tag danach)
     if now > end_date and not announcement_state["ended"]:
         await set_channel_visibility(guild, False)
         if announce_channel:
-            await announce_channel.send(
-                f"{mode_prefix}🔒 **Die Streckenwahl ist abgeschlossen.**\n"
-                "Danke an alle, die abgestimmt haben! Die Ergebnisse werden in den Rennkalender der nächsten Saison einfließen."
-            )
+            await announce_channel.send(TXT_ANNOUNCE_END.format(prefix=mode_prefix))
         announcement_state["ended"] = True
 
 
 @daily_check.before_loop
 async def before_daily_check():
     await bot.wait_until_ready()
-    # Warte bis Mitternacht für den ersten Lauf
-    now = datetime.now()
-    midnight = datetime(now.year, now.month, now.day, 0, 0, 5)
-    from datetime import timedelta
-    if now >= midnight:
-        midnight += timedelta(days=1)
-    wait_seconds = (midnight - now).total_seconds()
-    print(f"[INFO] Erster Daily-Check in {wait_seconds:.0f} Sekunden (Mitternacht).")
+    midnight_utc = local_midnight_utc()
+    now_utc = datetime.now(pytz.utc)
+    wait_seconds = (midnight_utc - now_utc).total_seconds()
+    print(f"[INFO] Erster Daily-Check in {wait_seconds:.0f} Sekunden (Mitternacht {TIMEZONE}).")
     await asyncio.sleep(wait_seconds)
 
 
@@ -182,14 +234,10 @@ async def on_ready():
     except Exception as e:
         print(f"[ERROR] Slash-Command Sync fehlgeschlagen: {e}")
 
-    # Persistente Views registrieren
     bot.add_view(WelcomeView())
-
     daily_check.start()
 
-    # Kurz warten bis Discord-Cache vollständig geladen ist
     await asyncio.sleep(5)
-    # Sofort-Check beim Start (falls Bot neu gestartet wurde während Abstimmung läuft)
     await startup_check()
 
 
@@ -201,7 +249,7 @@ async def startup_check():
         print(f"[ERROR] Startup-Check fehlgeschlagen: {e}")
         return
 
-    today = date.today()
+    today = local_today()
     guild = bot.guilds[0] if bot.guilds else None
     if not guild:
         return
@@ -210,7 +258,6 @@ async def startup_check():
         print("[INFO] Abstimmung ist aktiv – Channel wird sichtbar geschaltet.")
         await set_channel_visibility(guild, True)
         await asyncio.sleep(2)
-        # Prüfe ob bereits eine Welcome-Nachricht existiert
         channel = guild.get_channel(VOTING_CHANNEL_ID)
         if channel:
             has_welcome = False
@@ -244,38 +291,26 @@ class WelcomeView(discord.ui.View):
     async def vote_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
 
-        # Nickname ermitteln und sofort Begrüßung schicken
         member = interaction.guild.get_member(interaction.user.id)
         nickname = member.display_name if member else interaction.user.name
         await interaction.followup.send(
-            f"👋 Hallo **{nickname}**, ich lade die Strecken – deine Streckenwahl startet in Kürze!\n\n"
-            f"Bitte wähle aus technischen Gründen erst den **Kontinent**, dann die **Strecke**, "
-            f"und falls vorhanden eine **Streckenvariante**.\n"
-            f"Du kannst deine Auswahl jederzeit wieder ändern, solange die Abstimmung läuft.",
+            TXT_VOTE_GREETING.format(nickname=nickname),
             ephemeral=True,
         )
 
-        # Prüfe ob Abstimmung noch läuft
         try:
             start_date, end_date = sheets.get_voting_dates()
         except Exception:
-            await interaction.followup.send(
-                "❌ Fehler beim Lesen der Abstimmungsdaten.", ephemeral=True
-            )
+            await interaction.followup.send("❌ Fehler beim Lesen der Abstimmungsdaten.", ephemeral=True)
             return
 
-        today = date.today()
+        today = local_today()
         if not (start_date <= today <= end_date):
-            await interaction.followup.send(
-                "❌ Die Abstimmung ist aktuell nicht aktiv.", ephemeral=True
-            )
+            await interaction.followup.send("❌ Die Abstimmung ist aktuell nicht aktiv.", ephemeral=True)
             return
 
-        # Starte Voting-Flow für Wunsch 1
         view = ContinentSelectView(wish_number=1, existing_wishes={}, user=interaction.user)
-        await interaction.followup.send(
-            embed=wish_embed(1), view=view, ephemeral=True
-        )
+        await interaction.followup.send(embed=wish_embed(1), view=view, ephemeral=True)
 
 
 def wish_embed(wish_number: int, selected: dict = None, show_footer: bool = True) -> discord.Embed:
@@ -289,14 +324,14 @@ def wish_embed(wish_number: int, selected: dict = None, show_footer: bool = True
             [f"{i}. {t}" for i, t in selected.items()]
         ), inline=False)
     if show_footer:
-        embed.set_footer(text="Wähle zuerst den Kontinent, dann die Strecke.")
+        embed.set_footer(text=TXT_WISH_FOOTER)
     return embed
 
 
 def result_embed(wishes: dict) -> discord.Embed:
     embed = discord.Embed(
         title="✅ Deine Streckenauswahl",
-        description="Deine Wünsche wurden eingetragen. Du kannst sie jederzeit ändern, solange die Abstimmung läuft.",
+        description=TXT_RESULT_DESC,
         color=discord.Color.green(),
     )
     for i, track in wishes.items():
@@ -315,15 +350,7 @@ class ContinentSelectView(discord.ui.View):
     async def on_timeout(self):
         view = ResumeView(user=self.user)
         try:
-            await self.message.edit(
-                content=(
-                    "⏸️ **Kein Problem – nimm dir Zeit!**\n"
-                    "Deine bisherige Auswahl wurde gespeichert. "
-                    "Klicke auf den Button, um dort weiterzumachen, wo du aufgehört hast."
-                ),
-                embed=None,
-                view=view,
-            )
+            await self.message.edit(content=TXT_TIMEOUT_MSG, embed=None, view=view)
         except Exception:
             pass
 
@@ -352,7 +379,10 @@ class ContinentSelect(discord.ui.Select):
             "asien": "🌏 Asien & Ozeanien",
         }
         continent_label = continent_labels.get(continent, continent.capitalize())
-        track_list = tracks.get_tracks_by_continent(continent)
+
+        # Bereits gewählte Vollnamen ermitteln
+        already_chosen = set(self.existing_wishes.values())
+        track_list = tracks.get_tracks_by_continent(continent, exclude_fully_used=already_chosen)
 
         view = TrackSelectView(
             wish_number=self.wish_number,
@@ -380,15 +410,7 @@ class TrackSelectView(discord.ui.View):
     async def on_timeout(self):
         view = ResumeView(user=self.user)
         try:
-            await self.message.edit(
-                content=(
-                    "⏸️ **Kein Problem – nimm dir Zeit!**\n"
-                    "Deine bisherige Auswahl wurde gespeichert. "
-                    "Klicke auf den Button, um dort weiterzumachen, wo du aufgehört hast."
-                ),
-                embed=None,
-                view=view,
-            )
+            await self.message.edit(content=TXT_TIMEOUT_MSG, embed=None, view=view)
         except Exception:
             pass
 
@@ -411,16 +433,20 @@ class TrackSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         selected_track = self.values[0]
-        variants = tracks.get_variants(selected_track)
+        already_chosen = set(self.existing_wishes.values())
 
-        if len(variants) <= 1:
-            full_name = variants[0] if variants else selected_track
+        # Nur Varianten anzeigen, die noch nicht gewählt wurden
+        all_variants = tracks.get_variants(selected_track)
+        available_variants = [v for v in all_variants if v not in already_chosen]
+
+        if len(available_variants) <= 1:
+            full_name = available_variants[0] if available_variants else selected_track
             await finalize_wish(interaction, self.wish_number, full_name, self.existing_wishes)
         else:
             view = VariantSelectView(
                 wish_number=self.wish_number,
                 track_name=selected_track,
-                variants=variants,
+                variants=available_variants,
                 existing_wishes=self.existing_wishes,
             )
             embed = wish_embed(self.wish_number, self.existing_wishes, show_footer=False)
@@ -442,15 +468,7 @@ class VariantSelectView(discord.ui.View):
     async def on_timeout(self):
         view = ResumeView(user=self.user)
         try:
-            await self.message.edit(
-                content=(
-                    "⏸️ **Kein Problem – nimm dir Zeit!**\n"
-                    "Deine bisherige Auswahl wurde gespeichert. "
-                    "Klicke auf den Button, um dort weiterzumachen, wo du aufgehört hast."
-                ),
-                embed=None,
-                view=view,
-            )
+            await self.message.edit(content=TXT_TIMEOUT_MSG, embed=None, view=view)
         except Exception:
             pass
 
@@ -476,7 +494,6 @@ class VariantSelect(discord.ui.Select):
 
 
 async def finalize_wish(interaction: discord.Interaction, wish_number: int, full_track: str, existing_wishes: dict):
-    # Doppelungs-Check
     if full_track in existing_wishes.values():
         await interaction.followup.send(
             f"⚠️ **{full_track}** hast du bereits gewählt. Bitte wähle eine andere Strecke.",
@@ -493,20 +510,20 @@ async def finalize_wish(interaction: discord.Interaction, wish_number: int, full
             user=interaction.user,
         )
         await interaction.edit_original_response(
-            embed=wish_embed(wish_number + 1, existing_wishes), view=view
+            content=None,
+            embed=wish_embed(wish_number + 1, existing_wishes),
+            view=view,
         )
     else:
-        # Alle 3 Wünsche gesetzt → Ergebnisansicht
         view = ResultView(wishes=existing_wishes)
         member = interaction.guild.get_member(interaction.user.id) if interaction.guild else None
         nickname = member.display_name if member else None
         await interaction.edit_original_response(
-            content="⬇️ *Klicke auf einen der Buttons unten, um eine Strecke zu ändern.*",
+            content=TXT_RESULT_HINT,
             embed=result_embed(existing_wishes),
             view=view,
         )
 
-    # Sheet im Hintergrund speichern (nach Discord-Antwort)
     try:
         member = interaction.guild.get_member(interaction.user.id) if interaction.guild else None
         nickname = member.display_name if member else None
@@ -530,7 +547,6 @@ class ResumeView(discord.ui.View):
     )
     async def resume_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        # Aktuellen Stand aus Sheet laden
         try:
             current_wishes = await asyncio.get_event_loop().run_in_executor(
                 None, sheets.read_votes, interaction.user
@@ -538,7 +554,6 @@ class ResumeView(discord.ui.View):
         except Exception:
             current_wishes = {}
 
-        # Nächsten fehlenden Wunsch finden
         next_wish = None
         for i in range(1, 4):
             if i not in current_wishes or not current_wishes[i]:
@@ -546,10 +561,9 @@ class ResumeView(discord.ui.View):
                 break
 
         if next_wish is None:
-            # Alle 3 sind bereits vollständig
             view = ResultView(wishes=current_wishes)
             await interaction.edit_original_response(
-                content="⬇️ *Klicke auf einen der Buttons unten, um eine Strecke zu ändern.*",
+                content=TXT_RESULT_HINT,
                 embed=result_embed(current_wishes),
                 view=view,
             )
@@ -560,7 +574,9 @@ class ResumeView(discord.ui.View):
                 user=interaction.user,
             )
             await interaction.edit_original_response(
-                embed=wish_embed(next_wish, current_wishes), view=view
+                content=None,
+                embed=wish_embed(next_wish, current_wishes),
+                view=view,
             )
 
 
@@ -586,7 +602,6 @@ class ChangeWishButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        # Wünsche frisch aus dem Sheet laden (funktioniert auch nach Bot-Neustart)
         try:
             current_wishes = await asyncio.get_event_loop().run_in_executor(
                 None, sheets.read_votes, interaction.user
@@ -600,6 +615,7 @@ class ChangeWishButton(discord.ui.Button):
             existing_wishes=existing,
         )
         await interaction.edit_original_response(
+            content=None,
             embed=wish_embed(self.wish_number, existing),
             view=view,
         )

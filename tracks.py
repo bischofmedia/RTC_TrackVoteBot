@@ -23,33 +23,43 @@ CONTINENT_CODES = {
 
 @lru_cache(maxsize=1)
 def _load_all_tracks() -> list[dict]:
-    """Lädt alle Strecken aus dem Sheet (gecacht)."""
     return sheets.get_tracks_from_sheet()
 
 
 def invalidate_cache():
-    """Cache leeren, z.B. nach Sheet-Änderungen."""
     _load_all_tracks.cache_clear()
 
 
-def get_tracks_by_continent(continent: str) -> list[str]:
-    """Gibt die einzigartigen Streckennamen (ohne Variante) eines Kontinents zurück."""
+def get_tracks_by_continent(continent: str, exclude_fully_used: set[str] = None) -> list[str]:
+    """
+    Gibt die einzigartigen Streckennamen (ohne Variante) eines Kontinents zurück.
+    Strecken, bei denen ALLE Varianten bereits in exclude_fully_used enthalten sind,
+    werden weggelassen.
+    """
     codes = CONTINENT_CODES.get(continent.lower(), set())
     all_tracks = _load_all_tracks()
+    exclude_fully_used = exclude_fully_used or set()
 
     seen = set()
     result = []
     for t in all_tracks:
-        if t["code"] in codes:
-            base = _extract_base_name(t["name"])
-            if base not in seen:
-                seen.add(base)
-                result.append(base)
+        if t["code"] not in codes:
+            continue
+        base = _extract_base_name(t["name"])
+        if base in seen:
+            continue
+        seen.add(base)
+
+        # Prüfen ob alle Varianten dieser Strecke bereits gewählt wurden
+        all_variants = [x["name"] for x in all_tracks if _extract_base_name(x["name"]) == base]
+        if all_variants and all(v in exclude_fully_used for v in all_variants):
+            continue  # Strecke komplett ausgeschöpft → weglassen
+
+        result.append(base)
     return sorted(result)
 
 
 def get_variants(base_name: str) -> list[str]:
-    """Gibt alle Vollnamen (inkl. Variante) für eine Basisstrecke zurück."""
     all_tracks = _load_all_tracks()
     result = []
     for t in all_tracks:
@@ -69,43 +79,16 @@ def _extract_base_name(full_name: str) -> str:
       'Kyoto DP - Miyabi'          → 'Kyoto DP'
       'Willow Springs (Big Willow)'→ 'Willow Springs'
     """
-    # Bekannte Mehrwort-Basisnamen die NICHT getrennt werden sollen
-    # (d.h. der ' - ' gehört zum Basis-Namen)
     no_split = [
-        "Autopolis IRC",
-        "Kyoto DP",
-        "Lago Maggiore",
-        "Blue Moon Bay",
-        "Dragon Trail",
-        "Grand Valley",
-        "Sainte-Croix",
-        "Sardegna",
-        "Tokyo Expressway",
-        "Watkins Glen",
-        "Willow Springs",
-        "Red Bull Ring",
-        "Brands Hatch",
-        "LeMans",
-        "Nürburgring",
-        "Broad Bean Raceway",
-        "Alsace",
-        "Barcelona",
-        "Daytona",
-        "Deep Forest Raceway",
-        "Fuji",
-        "Suzuka",
-        "Mount Panorama",
-        "Special Stage Route X",
-        "Trial Mountain",
-        "High Speed Ring",
-        "Circuit Gilles Villeneuve",
-        "Yas Marina Circuit",
-        "Spa-Francorchamps",
-        "Laguna Seca",
-        "Goodwood Motor Circuit",
-        "Tsukuba Circuit",
-        "Northern Isle Speedway",
-        "Road Atlanta",
+        "Autopolis IRC", "Kyoto DP", "Lago Maggiore", "Blue Moon Bay",
+        "Dragon Trail", "Grand Valley", "Sainte-Croix", "Sardegna",
+        "Tokyo Expressway", "Watkins Glen", "Willow Springs", "Red Bull Ring",
+        "Brands Hatch", "LeMans", "Nürburgring", "Broad Bean Raceway",
+        "Alsace", "Barcelona", "Daytona", "Deep Forest Raceway", "Fuji",
+        "Suzuka", "Mount Panorama", "Special Stage Route X", "Trial Mountain",
+        "High Speed Ring", "Circuit Gilles Villeneuve", "Yas Marina Circuit",
+        "Spa-Francorchamps", "Laguna Seca", "Goodwood Motor Circuit",
+        "Tsukuba Circuit", "Northern Isle Speedway", "Road Atlanta",
         "Autódromo De Interlagos",
     ]
 
@@ -113,10 +96,8 @@ def _extract_base_name(full_name: str) -> str:
         if full_name.startswith(base):
             return base
 
-    # Fallback: alles vor ' - ' nehmen
     if " - " in full_name:
         return full_name.split(" - ")[0].strip()
 
-    # Klammern entfernen
     name = re.sub(r"\s*\(.*\)", "", full_name).strip()
     return name
