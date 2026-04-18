@@ -20,11 +20,9 @@ DRIVER_ROLE_NAME       = os.getenv("DRIVER_ROLE_NAME", "driver")
 ORGA_ROLE_NAME         = os.getenv("ORGA_ROLE_NAME", "orga")
 TIMEZONE               = os.getenv("TIMEZONE", "Europe/Berlin")
 
-# Testmodus
 TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"
 TEST_ANNOUNCE_CHANNEL_ID = int(os.getenv("TEST_ANNOUNCE_CHANNEL_ID", "0")) if os.getenv("TEST_ANNOUNCE_CHANNEL_ID") else None
 
-# Texte aus .env
 TXT_WELCOME_TITLE       = os.getenv("TXT_WELCOME_TITLE", "🏎️ Streckenwahl")
 TXT_WELCOME_BODY        = os.getenv("TXT_WELCOME_BODY",
     "Willkommen zur Streckenwahl! Wählt eure drei Wunschstrecken für die nächste Saison.\n"
@@ -32,6 +30,8 @@ TXT_WELCOME_BODY        = os.getenv("TXT_WELCOME_BODY",
     "⏳ Die Abstimmung läuft bis zum **{end_date}**.\n\n"
     "ℹ️ Das Saisonfinale wird traditionell auf der Nordschleife ausgetragen – "
     "Nürburgring 24h, Endurance und Nordschleife stehen daher nicht zur Auswahl.")
+TXT_NO_VOTING           = os.getenv("TXT_NO_VOTING",
+    "🏁 Aktuell ist kein TrackVoting aktiv.")
 TXT_VOTE_GREETING       = os.getenv("TXT_VOTE_GREETING",
     "👋 Hallo **{nickname}**, ich lade die Strecken – deine Streckenwahl startet in Kürze!\n\n"
     "Bitte wähle aus technischen Gründen erst den **Kontinent**, dann die **Strecke**, "
@@ -42,8 +42,8 @@ TXT_ANNOUNCE_START      = os.getenv("TXT_ANNOUNCE_START",
     "Gebt bis zum **{end_date}** eure drei Wunschstrecken ab.\n"
     "Zum Abstimmungs-Channel: <#{channel_id}>")
 TXT_ANNOUNCE_REMINDER   = os.getenv("TXT_ANNOUNCE_REMINDER",
-    "{prefix}⏰ **Erinnerung:** Die Streckenwahl endet morgen!\n"
-    "Noch nicht abgestimmt? Schnell, bis 23:59 Uhr: <#{channel_id}>")
+    "{prefix}⏰ **Erinnerung:** Die Streckenwahl endet heute um 23:59 Uhr!\n"
+    "Noch nicht abgestimmt? Schnell: <#{channel_id}>")
 TXT_ANNOUNCE_END        = os.getenv("TXT_ANNOUNCE_END",
     "{prefix}🔒 **Die Streckenwahl ist abgeschlossen.**\n"
     "Danke an alle, die abgestimmt haben! Die Ergebnisse werden in den Rennkalender der nächsten Saison einfließen.")
@@ -71,19 +71,29 @@ def get_announce_channel_id() -> int:
 def get_active_role_name() -> str:
     return ORGA_ROLE_NAME if TEST_MODE else DRIVER_ROLE_NAME
 
+def local_now() -> datetime:
+    return datetime.now(pytz.timezone(TIMEZONE))
+
 def local_today() -> date:
-    """Gibt das heutige Datum in der konfigurierten Zeitzone zurück."""
-    tz = pytz.timezone(TIMEZONE)
-    return datetime.now(tz).date()
+    return local_now().date()
 
 def local_midnight_utc() -> datetime:
-    """Gibt den nächsten Mitternacht-Zeitpunkt (Berliner Zeit) als UTC-aware datetime zurück."""
+    """Nächste Berliner Mitternacht als UTC."""
     tz = pytz.timezone(TIMEZONE)
-    now_local = datetime.now(tz)
-    midnight_local = tz.localize(datetime(now_local.year, now_local.month, now_local.day, 0, 0, 5))
+    now_local = local_now()
+    midnight_local = now_local.replace(hour=0, minute=0, second=5, microsecond=0)
     if now_local >= midnight_local:
         midnight_local += timedelta(days=1)
     return midnight_local.astimezone(pytz.utc)
+
+def local_2359_utc() -> datetime:
+    """Heutiges 23:59:00 Berliner Zeit als UTC."""
+    tz = pytz.timezone(TIMEZONE)
+    now_local = local_now()
+    target = now_local.replace(hour=23, minute=59, second=0, microsecond=0)
+    if now_local >= target:
+        target += timedelta(days=1)
+    return target.astimezone(pytz.utc)
 
 
 intents = discord.Intents.default()
@@ -107,6 +117,45 @@ def get_welcome_embed(end_date: date) -> discord.Embed:
         color=discord.Color.blue(),
     )
     return embed
+
+
+async def clear_voting_channel(guild: discord.Guild):
+    """Löscht alle Bot-Nachrichten im Voting-Channel."""
+    channel = guild.get_channel(VOTING_CHANNEL_ID)
+    if not channel:
+        return
+    perms = channel.permissions_for(guild.me)
+    if not perms.read_message_history:
+        return
+    deleted = 0
+    async for msg in channel.history(limit=100):
+        if msg.author == bot.user:
+            await msg.delete()
+            deleted += 1
+    print(f"[INFO] Voting-Channel geleert ({deleted} Nachrichten gelöscht).")
+
+
+async def post_no_voting_message(guild: discord.Guild):
+    """Postet die 'Kein Voting aktiv'-Nachricht in den Voting-Channel."""
+    channel = guild.get_channel(VOTING_CHANNEL_ID)
+    if not channel:
+        return
+    await clear_voting_channel(guild)
+    await channel.send(TXT_NO_VOTING)
+
+
+async def post_welcome_message(guild: discord.Guild, end_date: date):
+    """Postet das Welcome-Embed mit Abstimmen-Button."""
+    channel = guild.get_channel(VOTING_CHANNEL_ID)
+    if not channel:
+        print(f"[ERROR] Channel {VOTING_CHANNEL_ID} nicht gefunden!")
+        return
+    perms = channel.permissions_for(guild.me)
+    print(f"[DEBUG] Channel: {channel.name}, send_messages: {perms.send_messages}, view_channel: {perms.view_channel}")
+    await clear_voting_channel(guild)
+    embed = get_welcome_embed(end_date)
+    view = WelcomeView()
+    await channel.send(embed=embed, view=view)
 
 
 async def set_channel_visibility(guild: discord.Guild, visible: bool, notify: bool = True):
@@ -144,34 +193,38 @@ async def set_channel_visibility(guild: discord.Guild, visible: bool, notify: bo
             await orga_channel.send(TXT_ORGA_CHANNEL_CLOSE.format(role=role_name))
 
 
-async def clear_voting_channel(guild: discord.Guild):
-    """Löscht alle Bot-Nachrichten im Voting-Channel."""
+async def channel_has_welcome(guild: discord.Guild) -> bool:
+    """Prüft ob bereits ein Welcome-Embed im Channel ist."""
     channel = guild.get_channel(VOTING_CHANNEL_ID)
     if not channel:
-        return
+        return False
     perms = channel.permissions_for(guild.me)
     if not perms.read_message_history:
-        return
-    deleted = 0
-    async for msg in channel.history(limit=100):
-        if msg.author == bot.user:
-            await msg.delete()
-            deleted += 1
-    print(f"[INFO] Voting-Channel geleert ({deleted} Nachrichten gelöscht).")
+        return False
+    async for msg in channel.history(limit=10):
+        if msg.author == bot.user and msg.embeds:
+            return True
+    return False
 
 
-async def post_welcome_message(guild: discord.Guild, end_date: date):
+async def channel_has_no_voting_msg(guild: discord.Guild) -> bool:
+    """Prüft ob bereits eine 'Kein Voting'-Nachricht im Channel ist."""
     channel = guild.get_channel(VOTING_CHANNEL_ID)
     if not channel:
-        print(f"[ERROR] Channel {VOTING_CHANNEL_ID} nicht gefunden!")
-        return
+        return False
     perms = channel.permissions_for(guild.me)
-    print(f"[DEBUG] Channel: {channel.name}, send_messages: {perms.send_messages}, view_channel: {perms.view_channel}")
-    await clear_voting_channel(guild)
-    embed = get_welcome_embed(end_date)
-    view = WelcomeView()
-    await channel.send(embed=embed, view=view)
+    if not perms.read_message_history:
+        return False
+    async for msg in channel.history(limit=10):
+        if msg.author == bot.user and not msg.embeds and TXT_NO_VOTING in msg.content:
+            return True
+    return False
 
+
+# ──────────────────────────────────────────────
+# DAILY CHECK – läuft täglich um Berliner Mitternacht
+# Zuständig für: Start, Erinnerung (am End-Tag)
+# ──────────────────────────────────────────────
 
 @tasks.loop(hours=24)
 async def daily_check():
@@ -195,6 +248,7 @@ async def daily_check():
     announce_channel = guild.get_channel(get_announce_channel_id())
     mode_prefix = "🧪 **[TESTMODUS]** " if TEST_MODE else ""
 
+    # Abstimmung startet heute
     if now == start_date and not announcement_state["started"]:
         await set_channel_visibility(guild, True)
         await post_welcome_message(guild, end_date)
@@ -206,20 +260,14 @@ async def daily_check():
             ))
         announcement_state["started"] = True
 
-    if now == end_date - timedelta(days=1) and not announcement_state["reminded"]:
+    # Erinnerung am End-Tag um Mitternacht (nur wenn nicht gleichzeitig Start)
+    if now == end_date and now != start_date and not announcement_state["reminded"]:
         if announce_channel:
             await announce_channel.send(TXT_ANNOUNCE_REMINDER.format(
                 prefix=mode_prefix,
                 channel_id=VOTING_CHANNEL_ID,
             ))
         announcement_state["reminded"] = True
-
-    if now > end_date and not announcement_state["ended"]:
-        await clear_voting_channel(guild)
-        await set_channel_visibility(guild, False)
-        if announce_channel:
-            await announce_channel.send(TXT_ANNOUNCE_END.format(prefix=mode_prefix))
-        announcement_state["ended"] = True
 
 
 @daily_check.before_loop
@@ -229,6 +277,49 @@ async def before_daily_check():
     now_utc = datetime.now(pytz.utc)
     wait_seconds = (midnight_utc - now_utc).total_seconds()
     print(f"[INFO] Erster Daily-Check in {wait_seconds:.0f} Sekunden (Mitternacht {TIMEZONE}).")
+    await asyncio.sleep(wait_seconds)
+
+
+# ──────────────────────────────────────────────
+# END CHECK – läuft täglich um 23:59 Berliner Zeit
+# Zuständig für: Abstimmungsende
+# ──────────────────────────────────────────────
+
+@tasks.loop(hours=24)
+async def end_check():
+    now = local_today()
+
+    try:
+        start_date, end_date = sheets.get_voting_dates()
+    except Exception as e:
+        print(f"[ERROR] End-Check: Konnte Abstimmungsdaten nicht lesen: {e}")
+        return
+
+    guild = bot.guilds[0] if bot.guilds else None
+    if not guild:
+        return
+
+    announce_channel = guild.get_channel(get_announce_channel_id())
+    mode_prefix = "🧪 **[TESTMODUS]** " if TEST_MODE else ""
+
+    # Abstimmung endet heute um 23:59
+    if now == end_date and not announcement_state["ended"]:
+        await clear_voting_channel(guild)
+        await set_channel_visibility(guild, False)
+        await post_no_voting_message(guild)
+        if announce_channel:
+            await announce_channel.send(TXT_ANNOUNCE_END.format(prefix=mode_prefix))
+        announcement_state["ended"] = True
+        print(f"[INFO] Abstimmung beendet ({end_date}).")
+
+
+@end_check.before_loop
+async def before_end_check():
+    await bot.wait_until_ready()
+    target_utc = local_2359_utc()
+    now_utc = datetime.now(pytz.utc)
+    wait_seconds = (target_utc - now_utc).total_seconds()
+    print(f"[INFO] End-Check läuft in {wait_seconds:.0f} Sekunden (23:59 {TIMEZONE}).")
     await asyncio.sleep(wait_seconds)
 
 
@@ -245,13 +336,15 @@ async def on_ready():
 
     bot.add_view(WelcomeView())
     daily_check.start()
+    end_check.start()
 
     await asyncio.sleep(5)
     await startup_check()
 
 
 async def startup_check():
-    """Prüft beim Bot-Start ob Abstimmung gerade aktiv sein sollte."""
+    """Prüft beim Bot-Start ob Abstimmung gerade aktiv sein sollte,
+    und stellt sicher dass immer eine passende Nachricht im Channel steht."""
     try:
         start_date, end_date = sheets.get_voting_dates()
     except Exception as e:
@@ -259,28 +352,31 @@ async def startup_check():
         return
 
     today = local_today()
+    now = local_now()
     guild = bot.guilds[0] if bot.guilds else None
     if not guild:
         return
 
     if start_date <= today <= end_date:
-        print("[INFO] Abstimmung ist aktiv – Channel wird sichtbar geschaltet.")
-        await set_channel_visibility(guild, True, notify=False)
-        await asyncio.sleep(2)
-        channel = guild.get_channel(VOTING_CHANNEL_ID)
-        if channel:
-            has_welcome = False
-            perms = channel.permissions_for(guild.me)
-            if perms.read_message_history:
-                async for msg in channel.history(limit=10):
-                    if msg.author == bot.user and msg.embeds:
-                        has_welcome = True
-                        break
-            if not has_welcome:
+        # Abstimmung läuft – aber ist sie bereits um 23:59 vorbei?
+        end_of_day = now.replace(hour=23, minute=59, second=0, microsecond=0)
+        if today == end_date and now >= end_of_day:
+            # End-Tag nach 23:59 – Abstimmung bereits beendet
+            print("[INFO] Abstimmung bereits beendet (nach 23:59 am End-Tag).")
+            await set_channel_visibility(guild, False, notify=False)
+            if not await channel_has_no_voting_msg(guild):
+                await post_no_voting_message(guild)
+        else:
+            print("[INFO] Abstimmung ist aktiv – Channel wird sichtbar geschaltet.")
+            await set_channel_visibility(guild, True, notify=False)
+            await asyncio.sleep(2)
+            if not await channel_has_welcome(guild):
                 await post_welcome_message(guild, end_date)
     else:
         print("[INFO] Keine aktive Abstimmung – Channel bleibt unsichtbar.")
         await set_channel_visibility(guild, False, notify=False)
+        if not await channel_has_no_voting_msg(guild):
+            await post_no_voting_message(guild)
 
 
 # ──────────────────────────────────────────────
@@ -388,8 +484,6 @@ class ContinentSelect(discord.ui.Select):
             "asien": "🌏 Asien & Ozeanien",
         }
         continent_label = continent_labels.get(continent, continent.capitalize())
-
-        # Bereits gewählte Vollnamen ermitteln
         already_chosen = set(self.existing_wishes.values())
         track_list = tracks.get_tracks_by_continent(continent, exclude_fully_used=already_chosen)
 
@@ -443,8 +537,6 @@ class TrackSelect(discord.ui.Select):
         await interaction.response.defer(ephemeral=True)
         selected_track = self.values[0]
         already_chosen = set(self.existing_wishes.values())
-
-        # Nur Varianten anzeigen, die noch nicht gewählt wurden
         all_variants = tracks.get_variants(selected_track)
         available_variants = [v for v in all_variants if v not in already_chosen]
 
@@ -525,8 +617,6 @@ async def finalize_wish(interaction: discord.Interaction, wish_number: int, full
         )
     else:
         view = ResultView(wishes=existing_wishes)
-        member = interaction.guild.get_member(interaction.user.id) if interaction.guild else None
-        nickname = member.display_name if member else None
         await interaction.edit_original_response(
             content=TXT_RESULT_HINT,
             embed=result_embed(existing_wishes),
