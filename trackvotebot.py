@@ -304,7 +304,6 @@ async def end_check():
 
     # Abstimmung endet heute um 23:59
     if now == end_date and not announcement_state["ended"]:
-        await clear_voting_channel(guild)
         await set_channel_visibility(guild, False)
         await post_no_voting_message(guild)
         if announce_channel:
@@ -415,7 +414,8 @@ class WelcomeView(discord.ui.View):
             return
 
         view = ContinentSelectView(wish_number=1, existing_wishes={}, user=interaction.user)
-        await interaction.followup.send(embed=wish_embed(1), view=view, ephemeral=True)
+        msg = await interaction.followup.send(embed=wish_embed(1), view=view, ephemeral=True)
+        view._msg = msg
 
 
 def wish_embed(wish_number: int, selected: dict = None, show_footer: bool = True) -> discord.Embed:
@@ -450,14 +450,17 @@ class ContinentSelectView(discord.ui.View):
         self.wish_number = wish_number
         self.existing_wishes = existing_wishes
         self.user = user
+        self._msg = None  # wird nach followup.send() gesetzt
         self.add_item(ContinentSelect(wish_number, existing_wishes))
 
     async def on_timeout(self):
         view = ResumeView(user=self.user)
-        try:
-            await self.message.edit(content=TXT_TIMEOUT_MSG, embed=None, view=view)
-        except Exception:
-            pass
+        msg = self._msg or self.message
+        if msg:
+            try:
+                await msg.edit(content=TXT_TIMEOUT_MSG, embed=None, view=view)
+            except Exception:
+                pass
 
 
 class ContinentSelect(discord.ui.Select):
@@ -508,14 +511,17 @@ class TrackSelectView(discord.ui.View):
         super().__init__(timeout=300)
         self.user = user
         self.existing_wishes = existing_wishes
+        self._msg = None
         self.add_item(TrackSelect(wish_number, continent, continent_label, track_list, existing_wishes))
 
     async def on_timeout(self):
         view = ResumeView(user=self.user)
-        try:
-            await self.message.edit(content=TXT_TIMEOUT_MSG, embed=None, view=view)
-        except Exception:
-            pass
+        msg = self._msg or self.message
+        if msg:
+            try:
+                await msg.edit(content=TXT_TIMEOUT_MSG, embed=None, view=view)
+            except Exception:
+                pass
 
 
 class TrackSelect(discord.ui.Select):
@@ -540,9 +546,14 @@ class TrackSelect(discord.ui.Select):
         all_variants = tracks.get_variants(selected_track)
         available_variants = [v for v in all_variants if v not in already_chosen]
 
-        if len(available_variants) <= 1:
-            full_name = available_variants[0] if available_variants else selected_track
-            await finalize_wish(interaction, self.wish_number, full_name, self.existing_wishes)
+        if not available_variants:
+            await interaction.followup.send(
+                f"⚠️ Für **{selected_track}** sind alle Varianten bereits gewählt. Bitte wähle eine andere Strecke.",
+                ephemeral=True,
+            )
+            return
+        if len(available_variants) == 1:
+            await finalize_wish(interaction, self.wish_number, available_variants[0], self.existing_wishes)
         else:
             view = VariantSelectView(
                 wish_number=self.wish_number,
@@ -564,14 +575,17 @@ class VariantSelectView(discord.ui.View):
         super().__init__(timeout=300)
         self.user = user
         self.existing_wishes = existing_wishes
+        self._msg = None
         self.add_item(VariantSelect(wish_number, track_name, variants, existing_wishes))
 
     async def on_timeout(self):
         view = ResumeView(user=self.user)
-        try:
-            await self.message.edit(content=TXT_TIMEOUT_MSG, embed=None, view=view)
-        except Exception:
-            pass
+        msg = self._msg or self.message
+        if msg:
+            try:
+                await msg.edit(content=TXT_TIMEOUT_MSG, embed=None, view=view)
+            except Exception:
+                pass
 
 
 class VariantSelect(discord.ui.Select):
