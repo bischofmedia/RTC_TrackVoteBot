@@ -109,20 +109,16 @@ def get_welcome_embed(end_date: date) -> discord.Embed:
     return embed
 
 
-async def set_channel_visibility(guild: discord.Guild, visible: bool):
+async def set_channel_visibility(guild: discord.Guild, visible: bool, notify: bool = True):
     channel = guild.get_channel(VOTING_CHANNEL_ID)
     if not channel:
         return
 
-    orga_channel = guild.get_channel(ORGA_CHANNEL_ID)
+    orga_channel = guild.get_channel(ORGA_CHANNEL_ID) if notify else None
     role_name = get_active_role_name()
 
     if TEST_MODE:
         print(f"[INFO] [TESTMODUS] Channel-Sichtbarkeit wird nicht geändert.")
-        if orga_channel:
-            await orga_channel.send(
-                f"🧪 **[TESTMODUS]** Channel-Sichtbarkeit unverändert (Orga hat dauerhaft Zugriff)."
-            )
         return
 
     role = discord.utils.get(guild.roles, name=role_name)
@@ -131,7 +127,6 @@ async def set_channel_visibility(guild: discord.Guild, visible: bool):
         return
 
     if visible:
-        # Sichtbar, aber kein Schreiben – nur Lesen + Interaktion mit Buttons/Selects
         await channel.set_permissions(role,
             view_channel=True,
             send_messages=False,
@@ -270,7 +265,7 @@ async def startup_check():
 
     if start_date <= today <= end_date:
         print("[INFO] Abstimmung ist aktiv – Channel wird sichtbar geschaltet.")
-        await set_channel_visibility(guild, True)
+        await set_channel_visibility(guild, True, notify=False)
         await asyncio.sleep(2)
         channel = guild.get_channel(VOTING_CHANNEL_ID)
         if channel:
@@ -285,7 +280,7 @@ async def startup_check():
                 await post_welcome_message(guild, end_date)
     else:
         print("[INFO] Keine aktive Abstimmung – Channel bleibt unsichtbar.")
-        await set_channel_visibility(guild, False)
+        await set_channel_visibility(guild, False, notify=False)
 
 
 # ──────────────────────────────────────────────
