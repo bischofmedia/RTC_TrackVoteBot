@@ -1,5 +1,6 @@
 import os
 from datetime import date, datetime
+from functools import lru_cache
 import gspread
 from google.oauth2.service_account import Credentials
 import discord
@@ -17,12 +18,32 @@ RED_TEXT = {
     "textFormat": {"foregroundColor": {"red": 1.0, "green": 0.0, "blue": 0.0}},
 }
 
+# Gecachter Client – wird nur einmal pro Prozess erstellt
+_client_cache: gspread.Client | None = None
 
-def get_client():
-    creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
-    client = gspread.Client(auth=creds)
-    client.set_timeout(30)
-    return client
+def get_client() -> gspread.Client:
+    global _client_cache
+    if _client_cache is None:
+        creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
+        _client_cache = gspread.Client(auth=creds)
+        _client_cache.set_timeout(30)
+    return _client_cache
+
+def invalidate_client():
+    """Client-Cache leeren, z.B. nach Auth-Fehler."""
+    global _client_cache
+    _client_cache = None
+
+
+def _with_retry(fn):
+    """Führt fn() aus; bei Auth-Fehler Client-Cache leeren und nochmal versuchen."""
+    try:
+        return fn()
+    except gspread.exceptions.APIError as e:
+        if e.response.status_code in (401, 403):
+            invalidate_client()
+            return fn()
+        raise
 
 
 def get_voting_dates() -> tuple[date, date]:
@@ -37,8 +58,9 @@ def get_voting_dates() -> tuple[date, date]:
     return start_date, end_date
 
 
+@lru_cache(maxsize=256)
 def get_psn_name(discord_name: str) -> str | None:
-    """Sucht PSN-Namen anhand des Discord-Namens in DB_drvr."""
+    """Sucht PSN-Namen anhand des Discord-Namens in DB_drvr (gecacht)."""
     gc = get_client()
     sh = gc.open_by_key(GOOGLE_SHEETS_ID)
     ws = sh.worksheet("DB_drvr")
@@ -51,6 +73,10 @@ def get_psn_name(discord_name: str) -> str | None:
             if discord_col.lower() == discord_name.lower() and psn_col:
                 return psn_col
     return None
+
+def invalidate_psn_cache():
+    """PSN-Cache leeren, z.B. wenn DB_drvr sich geändert hat."""
+    get_psn_name.cache_clear()
 
 
 def get_tracks_from_sheet() -> list[dict]:
