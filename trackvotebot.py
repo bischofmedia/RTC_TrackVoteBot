@@ -21,6 +21,7 @@ ORGA_ROLE_NAME         = os.getenv("ORGA_ROLE_NAME", "orga")
 TIMEZONE               = os.getenv("TIMEZONE", "Europe/Berlin")
 
 TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"
+IGAL_MODE = os.getenv("EGAL", "false").lower() == "true"
 TEST_ANNOUNCE_CHANNEL_ID = int(os.getenv("TEST_ANNOUNCE_CHANNEL_ID", "0")) if os.getenv("TEST_ANNOUNCE_CHANNEL_ID") else None
 
 TXT_WELCOME_TITLE       = os.getenv("TXT_WELCOME_TITLE", "🏎️ Streckenwahl")
@@ -413,9 +414,34 @@ class WelcomeView(discord.ui.View):
             await interaction.followup.send("❌ Die Abstimmung ist aktuell nicht aktiv.", ephemeral=True)
             return
 
-        view = ContinentSelectView(wish_number=1, existing_wishes={}, user=interaction.user)
-        msg = await interaction.followup.send(embed=wish_embed(1), view=view, ephemeral=True)
-        view._msg = msg
+        # Prüfen ob bereits Votes vorhanden – dann direkt Result-Ansicht zeigen
+        try:
+            existing_wishes = await asyncio.get_event_loop().run_in_executor(
+                None, sheets.read_votes, interaction.user
+            )
+        except Exception:
+            existing_wishes = {}
+
+        if len(existing_wishes) == 3:
+            # Alle drei Wünsche bereits abgegeben → direkt zur Ergebnisansicht
+            view = ResultView(wishes=existing_wishes)
+            await interaction.followup.send(
+                content=TXT_RESULT_HINT,
+                embed=result_embed(existing_wishes),
+                view=view,
+                ephemeral=True,
+            )
+        elif existing_wishes:
+            # Teilweise abgestimmt → beim nächsten fehlenden Wunsch weitermachen
+            next_wish = next(i for i in range(1, 4) if i not in existing_wishes)
+            view = ContinentSelectView(wish_number=next_wish, existing_wishes=existing_wishes, user=interaction.user)
+            msg = await interaction.followup.send(embed=wish_embed(next_wish, existing_wishes), view=view, ephemeral=True)
+            view._msg = msg
+        else:
+            # Noch keine Votes → von vorne beginnen
+            view = ContinentSelectView(wish_number=1, existing_wishes={}, user=interaction.user)
+            msg = await interaction.followup.send(embed=wish_embed(1), view=view, ephemeral=True)
+            view._msg = msg
 
 
 def wish_embed(wish_number: int, selected: dict = None, show_footer: bool = True) -> discord.Embed:
@@ -588,13 +614,30 @@ class VariantSelectView(discord.ui.View):
                 pass
 
 
+ALLE_VARIANTEN_LABEL = "🎯 Sämtliche Varianten"
+
 class VariantSelect(discord.ui.Select):
     def __init__(self, wish_number, track_name, variants, existing_wishes):
         self.wish_number = wish_number
+        self.track_name = track_name
         self.existing_wishes = existing_wishes
-        options = [
+
+        options = []
+        # EGAL-Modus: "Sämtliche Varianten" nur anbieten wenn noch keine
+        # Variante dieser Strecke bereits gewählt wurde
+        already_chosen = set(existing_wishes.values())
+        track_already_partially_chosen = any(
+            v in already_chosen for v in variants
+        )
+        if IGAL_MODE and not track_already_partially_chosen:
+            options.append(discord.SelectOption(
+                label=ALLE_VARIANTEN_LABEL,
+                value=ALLE_VARIANTEN_LABEL,
+                description="Alle Varianten dieser Strecke sind mir recht",
+            ))
+        options += [
             discord.SelectOption(label=v, value=v)
-            for v in variants[:25]
+            for v in variants[:24]  # max 24 + ggf. "Alle" = 25
         ]
         super().__init__(
             placeholder="Variante wählen...",
@@ -605,16 +648,30 @@ class VariantSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         selected_variant = self.values[0]
-        await finalize_wish(interaction, self.wish_number, selected_variant, self.existing_wishes)
+        await finalize_wish(interaction, self.wish_number, selected_variant, self.existing_wishes, track_name=self.track_name)
 
 
-async def finalize_wish(interaction: discord.Interaction, wish_number: int, full_track: str, existing_wishes: dict):
+async def finalize_wish(interaction: discord.Interaction, wish_number: int, full_track: str, existing_wishes: dict, track_name: str = None):
+    # EGAL-Modus: "Sämtliche Varianten" zu "<Strecke> - Alle Varianten" umwandeln
+    if full_track == ALLE_VARIANTEN_LABEL and track_name:
+        full_track = f"{track_name} - Alle Varianten"
+
     if full_track in existing_wishes.values():
         await interaction.followup.send(
             f"⚠️ **{full_track}** hast du bereits gewählt. Bitte wähle eine andere Strecke.",
             ephemeral=True,
         )
         return
+    
+    # Prüfen ob Strecken-Basisname bereits via "Alle Varianten" gewählt wurde
+    if track_name:
+        alle_key = f"{track_name} - Alle Varianten"
+        if alle_key in existing_wishes.values():
+            await interaction.followup.send(
+                f"⚠️ Du hast bereits **alle Varianten von {track_name}** gewählt.",
+                ephemeral=True,
+            )
+            return
 
     existing_wishes[wish_number] = full_track
 
@@ -722,10 +779,13 @@ class ChangeWishButton(discord.ui.Button):
         except Exception:
             current_wishes = dict(self.wishes)
 
+        # Nur den zu ändernden Wunsch aus existing_wishes entfernen,
+        # alle anderen behalten
         existing = {k: v for k, v in current_wishes.items() if k != self.wish_number}
         view = ContinentSelectView(
             wish_number=self.wish_number,
             existing_wishes=existing,
+            user=interaction.user,
         )
         await interaction.edit_original_response(
             content=None,

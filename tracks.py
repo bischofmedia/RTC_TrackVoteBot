@@ -34,11 +34,18 @@ def get_tracks_by_continent(continent: str, exclude_fully_used: set[str] = None)
     """
     Gibt die einzigartigen Streckennamen (ohne Variante) eines Kontinents zurück.
     Strecken, bei denen ALLE Varianten bereits in exclude_fully_used enthalten sind,
-    werden weggelassen.
+    oder die via "Alle Varianten" gewählt wurden, werden weggelassen.
     """
     codes = CONTINENT_CODES.get(continent.lower(), set())
     all_tracks = _load_all_tracks()
     exclude_fully_used = exclude_fully_used or set()
+
+    # Strecken die via "Alle Varianten" gewählt wurden direkt sperren
+    alle_varianten_bases = {
+        v.replace(" - Alle Varianten", "").strip()
+        for v in exclude_fully_used
+        if v.endswith(" - Alle Varianten")
+    }
 
     seen = set()
     result = []
@@ -50,10 +57,14 @@ def get_tracks_by_continent(continent: str, exclude_fully_used: set[str] = None)
             continue
         seen.add(base)
 
+        # Gesperrt via "Alle Varianten"
+        if base in alle_varianten_bases:
+            continue
+
         # Prüfen ob alle Varianten dieser Strecke bereits gewählt wurden
         all_variants = [x["name"] for x in all_tracks if _extract_base_name(x["name"]) == base]
         if all_variants and all(v in exclude_fully_used for v in all_variants):
-            continue  # Strecke komplett ausgeschöpft → weglassen
+            continue
 
         result.append(base)
     return sorted(result)

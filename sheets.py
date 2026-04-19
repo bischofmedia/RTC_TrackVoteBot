@@ -102,20 +102,26 @@ def write_votes(user: discord.User, wishes: dict, nickname: str | None = None):
     else:
         display_name = discord_name
 
-    track1 = wishes.get(1, "")
-    track2 = wishes.get(2, "")
-    track3 = wishes.get(3, "")
-
     existing_row = find_existing_vote_row(ws, display_name)
 
     if existing_row:
         row_num = existing_row
+        # Bestehende Wünsche aus dem Sheet lesen um nur gesetzte zu überschreiben
+        existing = ws.row_values(row_num)
+        def current(col_idx):
+            return existing[col_idx].strip() if len(existing) > col_idx else ""
+        track1 = wishes.get(1, "") or current(3)  # Spalte D = Index 3
+        track2 = wishes.get(2, "") or current(4)  # Spalte E = Index 4
+        track3 = wishes.get(3, "") or current(5)  # Spalte F = Index 5
     else:
-        # Nächste freie Zeile in Spalte B finden
+        # Neue Zeile
         col_b = ws.col_values(2)
         row_num = len(col_b) + 1
         if row_num < 2:
             row_num = 2
+        track1 = wishes.get(1, "")
+        track2 = wishes.get(2, "")
+        track3 = wishes.get(3, "")
 
     # Werte schreiben: B, D, E, F
     ws.update_cell(row_num, 2, display_name)   # Spalte B
