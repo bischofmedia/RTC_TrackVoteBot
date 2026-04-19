@@ -481,7 +481,7 @@ class ContinentSelectView(discord.ui.View):
 
     async def on_timeout(self):
         view = ResumeView(user=self.user)
-        msg = self._msg or self.message
+        msg = self._msg or getattr(self, "message", None)
         if msg:
             try:
                 await msg.edit(content=TXT_TIMEOUT_MSG, embed=None, view=view)
@@ -554,7 +554,7 @@ class TrackSelectView(discord.ui.View):
 
     async def on_timeout(self):
         view = ResumeView(user=self.user)
-        msg = self._msg or self.message
+        msg = self._msg or getattr(self, "message", None)
         if msg:
             try:
                 await msg.edit(content=TXT_TIMEOUT_MSG, embed=None, view=view)
@@ -618,7 +618,7 @@ class VariantSelectView(discord.ui.View):
 
     async def on_timeout(self):
         view = ResumeView(user=self.user)
-        msg = self._msg or self.message
+        msg = self._msg or getattr(self, "message", None)
         if msg:
             try:
                 await msg.edit(content=TXT_TIMEOUT_MSG, embed=None, view=view)
@@ -795,7 +795,7 @@ class ChangeWishButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        # Frisch aus Sheet laden
+        # Frisch aus Sheet laden – Slot NICHT leeren, erst beim Speichern überschreiben
         try:
             current_wishes = await asyncio.get_event_loop().run_in_executor(
                 None, sheets.read_votes, interaction.user
@@ -804,14 +804,6 @@ class ChangeWishButton(discord.ui.Button):
             current_wishes = dict(self.wishes)
 
         old_track = current_wishes.get(self.wish_number, "")
-
-        # Slot im Sheet leeren
-        try:
-            await asyncio.get_event_loop().run_in_executor(
-                None, sheets.clear_wish, interaction.user, self.wish_number
-            )
-        except Exception as e:
-            print(f"[WARN] clear_wish fehlgeschlagen: {e}")
 
         # Separater Edit-Flow – völlig unabhängig vom normalen Voting
         view = EditContinentSelectView(
@@ -873,7 +865,7 @@ class EditContinentSelect(discord.ui.Select):
         }
         continent_label = continent_labels.get(continent, continent.capitalize())
 
-        # Aktuell gewählte andere Wünsche laden um Doppelungen zu verhindern
+        # Andere Wünsche laden – der eigene Slot wird nicht als "bereits gewählt" gezählt
         try:
             all_wishes = await asyncio.get_event_loop().run_in_executor(
                 None, sheets.read_votes, interaction.user
@@ -926,7 +918,7 @@ class EditTrackSelect(discord.ui.Select):
         await interaction.response.defer(ephemeral=True)
         selected_track = self.values[0]
 
-        # Andere gewählte Wünsche laden
+        # Andere Wünsche laden – eigener Slot zählt nicht als bereits gewählt
         try:
             all_wishes = await asyncio.get_event_loop().run_in_executor(
                 None, sheets.read_votes, interaction.user
@@ -1004,7 +996,7 @@ class EditVariantSelect(discord.ui.Select):
 
 async def edit_save_wish(interaction: discord.Interaction, wish_number: int, new_track: str):
     """Speichert den geänderten Wunsch und zeigt die aktualisierte Ergebnisansicht."""
-    # Alle aktuellen Wünsche laden, neuen einsetzen
+    # Alle aktuellen Wünsche frisch laden
     try:
         current_wishes = await asyncio.get_event_loop().run_in_executor(
             None, sheets.read_votes, interaction.user
@@ -1012,7 +1004,7 @@ async def edit_save_wish(interaction: discord.Interaction, wish_number: int, new
     except Exception:
         current_wishes = {}
 
-    # Doppelungs-Check
+    # Doppelungs-Check gegen die ANDEREN Wünsche
     other_wishes = {v for k, v in current_wishes.items() if k != wish_number}
     if new_track in other_wishes:
         await interaction.followup.send(
@@ -1021,9 +1013,10 @@ async def edit_save_wish(interaction: discord.Interaction, wish_number: int, new
         )
         return
 
+    # Neuen Wunsch einsetzen – andere bleiben erhalten
     current_wishes[wish_number] = new_track
 
-    # Im Sheet speichern
+    # Komplett ins Sheet schreiben
     try:
         member = interaction.guild.get_member(interaction.user.id) if interaction.guild else None
         nickname = member.display_name if member else None
