@@ -514,14 +514,13 @@ class ContinentSelect(discord.ui.Select):
         }
         continent_label = continent_labels.get(continent, continent.capitalize())
 
-        # Immer frisch aus dem Sheet laden damit nach Änderung die anderen Wünsche erhalten bleiben
+        # Fehlende Wünsche aus Sheet nachladen (z.B. nach Bot-Neustart)
         try:
             fresh = await asyncio.get_event_loop().run_in_executor(
                 None, sheets.read_votes, interaction.user
             )
-            # Eigenen Wunsch-Slot aus fresh entfernen, Rest behalten
             for k, v in fresh.items():
-                if k not in self.existing_wishes:
+                if k not in self.existing_wishes and k != self.wish_number:
                     self.existing_wishes[k] = v
         except Exception:
             pass
@@ -795,6 +794,8 @@ class ChangeWishButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+
+        # Aktuellen Stand aus Sheet laden
         try:
             current_wishes = await asyncio.get_event_loop().run_in_executor(
                 None, sheets.read_votes, interaction.user
@@ -802,8 +803,16 @@ class ChangeWishButton(discord.ui.Button):
         except Exception:
             current_wishes = dict(self.wishes)
 
-        # Nur den zu ändernden Wunsch aus existing_wishes entfernen,
-        # alle anderen behalten
+        # Zu ändernden Slot im Sheet leeren damit finalize_wish
+        # beim Speichern den richtigen neuen Wert setzt
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None, sheets.clear_wish, interaction.user, self.wish_number
+            )
+        except Exception as e:
+            print(f"[WARN] clear_wish fehlgeschlagen: {e}")
+
+        # Diesen Slot aus existing entfernen, Rest behalten
         existing = {k: v for k, v in current_wishes.items() if k != self.wish_number}
         view = ContinentSelectView(
             wish_number=self.wish_number,

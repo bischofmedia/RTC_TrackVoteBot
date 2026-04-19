@@ -181,3 +181,23 @@ def read_votes(user: discord.User) -> dict:
         if val:
             result[i] = val
     return result
+
+
+def clear_wish(user: discord.User, wish_number: int):
+    """Löscht einen einzelnen Wunsch-Slot im Sheet (setzt ihn auf leer)."""
+    gc = get_client()
+    sh = gc.open_by_key(GOOGLE_SHEETS_ID)
+    ws = sh.worksheet("TrackVoting")
+
+    discord_name = str(user.name)
+    psn_name = get_psn_name(discord_name)
+    display_name = psn_name if psn_name else discord_name
+
+    row_num = find_existing_vote_row(ws, display_name)
+    if not row_num:
+        return  # Noch kein Eintrag, nichts zu löschen
+
+    col_map = {1: 4, 2: 5, 3: 6}  # Wunsch → Spalte (D, E, F)
+    col = col_map.get(wish_number)
+    if col:
+        ws.update_cell(row_num, col, "")
