@@ -494,7 +494,7 @@ class ContinentSelect(discord.ui.Select):
         self.wish_number = wish_number
         self.existing_wishes = existing_wishes
         options = [
-            discord.SelectOption(label="🌍 Europa", value="europa"),
+            discord.SelectOption(label="🌍 Europa & Mittlerer Osten", value="europa"),
             discord.SelectOption(label="🌎 Amerika", value="amerika"),
             discord.SelectOption(label="🌏 Asien & Ozeanien", value="asien"),
         ]
@@ -795,7 +795,7 @@ class ChangeWishButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        # Aktuellen Stand aus Sheet laden
+        # Frisch aus Sheet laden
         try:
             current_wishes = await asyncio.get_event_loop().run_in_executor(
                 None, sheets.read_votes, interaction.user
@@ -803,8 +803,9 @@ class ChangeWishButton(discord.ui.Button):
         except Exception:
             current_wishes = dict(self.wishes)
 
-        # Zu ändernden Slot im Sheet leeren damit finalize_wish
-        # beim Speichern den richtigen neuen Wert setzt
+        old_track = current_wishes.get(self.wish_number, "")
+
+        # Slot im Sheet leeren
         try:
             await asyncio.get_event_loop().run_in_executor(
                 None, sheets.clear_wish, interaction.user, self.wish_number
@@ -812,18 +813,233 @@ class ChangeWishButton(discord.ui.Button):
         except Exception as e:
             print(f"[WARN] clear_wish fehlgeschlagen: {e}")
 
-        # Diesen Slot aus existing entfernen, Rest behalten
-        existing = {k: v for k, v in current_wishes.items() if k != self.wish_number}
-        view = ContinentSelectView(
+        # Separater Edit-Flow – völlig unabhängig vom normalen Voting
+        view = EditContinentSelectView(
             wish_number=self.wish_number,
-            existing_wishes=existing,
+            old_track=old_track,
             user=interaction.user,
         )
+        titles = {1: "Ersten", 2: "Zweiten", 3: "Dritten"}
         await interaction.edit_original_response(
             content=None,
-            embed=wish_embed(self.wish_number, existing),
+            embed=discord.Embed(
+                title=f"✏️ {titles[self.wish_number]} Wunsch ändern",
+                description=f"Bisherige Wahl: **{old_track}**\n\nWähle den Kontinent der neuen Strecke:",
+                color=discord.Color.orange(),
+            ),
             view=view,
         )
+
+
+# ──────────────────────────────────────────────
+# EDIT-FLOW – komplett separater Flow fürs Ändern
+# ──────────────────────────────────────────────
+
+class EditContinentSelectView(discord.ui.View):
+    def __init__(self, wish_number: int, old_track: str, user=None):
+        super().__init__(timeout=300)
+        self.user = user
+        self.add_item(EditContinentSelect(wish_number, old_track))
+
+    async def on_timeout(self):
+        try:
+            await self.message.edit(content="⏱️ Zeit abgelaufen. Bitte erneut auf den Änderungs-Button klicken.", embed=None, view=None)
+        except Exception:
+            pass
+
+
+class EditContinentSelect(discord.ui.Select):
+    def __init__(self, wish_number: int, old_track: str):
+        self.wish_number = wish_number
+        self.old_track = old_track
+        options = [
+            discord.SelectOption(label="🌍 Europa & Mittlerer Osten", value="europa"),
+            discord.SelectOption(label="🌎 Amerika", value="amerika"),
+            discord.SelectOption(label="🌏 Asien & Ozeanien", value="asien"),
+        ]
+        super().__init__(
+            placeholder="Kontinent wählen...",
+            options=options,
+            custom_id=f"edit_continent_{wish_number}",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        continent = self.values[0]
+        continent_labels = {
+            "europa": "🌍 Europa & Mittlerer Osten",
+            "amerika": "🌎 Amerika",
+            "asien": "🌏 Asien & Ozeanien",
+        }
+        continent_label = continent_labels.get(continent, continent.capitalize())
+
+        # Aktuell gewählte andere Wünsche laden um Doppelungen zu verhindern
+        try:
+            all_wishes = await asyncio.get_event_loop().run_in_executor(
+                None, sheets.read_votes, interaction.user
+            )
+        except Exception:
+            all_wishes = {}
+        already_chosen = {v for k, v in all_wishes.items() if k != self.wish_number}
+
+        track_list = tracks.get_tracks_by_continent(continent, exclude_fully_used=already_chosen)
+
+        view = EditTrackSelectView(
+            wish_number=self.wish_number,
+            old_track=self.old_track,
+            continent_label=continent_label,
+            track_list=track_list,
+        )
+        embed = discord.Embed(
+            title=f"✏️ Wunsch {self.wish_number} ändern – {continent_label}",
+            description="Wähle die neue Strecke:",
+            color=discord.Color.orange(),
+        )
+        await interaction.edit_original_response(embed=embed, view=view)
+
+
+class EditTrackSelectView(discord.ui.View):
+    def __init__(self, wish_number, old_track, continent_label, track_list, user=None):
+        super().__init__(timeout=300)
+        self.user = user
+        self.add_item(EditTrackSelect(wish_number, old_track, track_list))
+
+    async def on_timeout(self):
+        try:
+            await self.message.edit(content="⏱️ Zeit abgelaufen. Bitte erneut auf den Änderungs-Button klicken.", embed=None, view=None)
+        except Exception:
+            pass
+
+
+class EditTrackSelect(discord.ui.Select):
+    def __init__(self, wish_number, old_track, track_list):
+        self.wish_number = wish_number
+        self.old_track = old_track
+        options = [discord.SelectOption(label=t, value=t) for t in track_list[:25]]
+        super().__init__(
+            placeholder="Strecke wählen...",
+            options=options,
+            custom_id=f"edit_track_{wish_number}",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        selected_track = self.values[0]
+
+        # Andere gewählte Wünsche laden
+        try:
+            all_wishes = await asyncio.get_event_loop().run_in_executor(
+                None, sheets.read_votes, interaction.user
+            )
+        except Exception:
+            all_wishes = {}
+        already_chosen = {v for k, v in all_wishes.items() if k != self.wish_number}
+
+        all_variants = tracks.get_variants(selected_track)
+        available_variants = [v for v in all_variants if v not in already_chosen]
+
+        if not available_variants:
+            await interaction.followup.send(
+                f"⚠️ Für **{selected_track}** sind alle Varianten bereits gewählt.",
+                ephemeral=True,
+            )
+            return
+
+        if len(available_variants) == 1:
+            await edit_save_wish(interaction, self.wish_number, available_variants[0])
+        else:
+            view = EditVariantSelectView(
+                wish_number=self.wish_number,
+                track_name=selected_track,
+                variants=available_variants,
+            )
+            embed = discord.Embed(
+                title=f"✏️ Wunsch {self.wish_number} ändern – Variante",
+                description=f"Für ***{selected_track}*** stehen mehrere Varianten zur Wahl:",
+                color=discord.Color.orange(),
+            )
+            await interaction.edit_original_response(embed=embed, view=view)
+
+
+class EditVariantSelectView(discord.ui.View):
+    def __init__(self, wish_number, track_name, variants, user=None):
+        super().__init__(timeout=300)
+        self.user = user
+        self.add_item(EditVariantSelect(wish_number, track_name, variants))
+
+    async def on_timeout(self):
+        try:
+            await self.message.edit(content="⏱️ Zeit abgelaufen. Bitte erneut auf den Änderungs-Button klicken.", embed=None, view=None)
+        except Exception:
+            pass
+
+
+class EditVariantSelect(discord.ui.Select):
+    def __init__(self, wish_number, track_name, variants):
+        self.wish_number = wish_number
+        self.track_name = track_name
+
+        # EGAL-Modus
+        options = []
+        if IGAL_MODE:
+            options.append(discord.SelectOption(
+                label=ALLE_VARIANTEN_LABEL,
+                value=ALLE_VARIANTEN_LABEL,
+                description="Jede Variante ist okay",
+            ))
+        options += [discord.SelectOption(label=v, value=v) for v in variants[:24]]
+        super().__init__(
+            placeholder="Variante wählen...",
+            options=options,
+            custom_id=f"edit_variant_{wish_number}",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        selected = self.values[0]
+        if selected == ALLE_VARIANTEN_LABEL:
+            selected = f"{self.track_name} - Alle Varianten"
+        await edit_save_wish(interaction, self.wish_number, selected)
+
+
+async def edit_save_wish(interaction: discord.Interaction, wish_number: int, new_track: str):
+    """Speichert den geänderten Wunsch und zeigt die aktualisierte Ergebnisansicht."""
+    # Alle aktuellen Wünsche laden, neuen einsetzen
+    try:
+        current_wishes = await asyncio.get_event_loop().run_in_executor(
+            None, sheets.read_votes, interaction.user
+        )
+    except Exception:
+        current_wishes = {}
+
+    # Doppelungs-Check
+    other_wishes = {v for k, v in current_wishes.items() if k != wish_number}
+    if new_track in other_wishes:
+        await interaction.followup.send(
+            f"⚠️ **{new_track}** hast du bereits gewählt. Bitte wähle eine andere Strecke.",
+            ephemeral=True,
+        )
+        return
+
+    current_wishes[wish_number] = new_track
+
+    # Im Sheet speichern
+    try:
+        member = interaction.guild.get_member(interaction.user.id) if interaction.guild else None
+        nickname = member.display_name if member else None
+        await asyncio.get_event_loop().run_in_executor(
+            None, sheets.write_votes, interaction.user, current_wishes, nickname
+        )
+    except Exception as e:
+        print(f"[ERROR] edit_save_wish fehlgeschlagen: {e}")
+
+    # Ergebnisansicht mit allen 3 Wünschen zeigen
+    view = ResultView(wishes=current_wishes)
+    await interaction.edit_original_response(
+        content=TXT_RESULT_HINT,
+        embed=result_embed(current_wishes),
+        view=view,
+    )
 
 
 if __name__ == "__main__":
