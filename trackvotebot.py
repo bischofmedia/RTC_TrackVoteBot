@@ -513,6 +513,19 @@ class ContinentSelect(discord.ui.Select):
             "asien": "🌏 Asien & Ozeanien",
         }
         continent_label = continent_labels.get(continent, continent.capitalize())
+
+        # Immer frisch aus dem Sheet laden damit nach Änderung die anderen Wünsche erhalten bleiben
+        try:
+            fresh = await asyncio.get_event_loop().run_in_executor(
+                None, sheets.read_votes, interaction.user
+            )
+            # Eigenen Wunsch-Slot aus fresh entfernen, Rest behalten
+            for k, v in fresh.items():
+                if k not in self.existing_wishes:
+                    self.existing_wishes[k] = v
+        except Exception:
+            pass
+
         already_chosen = set(self.existing_wishes.values())
         track_list = tracks.get_tracks_by_continent(continent, exclude_fully_used=already_chosen)
 
