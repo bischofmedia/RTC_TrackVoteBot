@@ -64,6 +64,15 @@ TXT_WISH_FOOTER         = os.getenv("TXT_WISH_FOOTER",
     "Wähle zuerst den Kontinent, dann die Strecke.")
 
 
+def _get_nickname(interaction: discord.Interaction) -> str | None:
+    """Ermittelt den Server-Nickname des Users aus der Interaction."""
+    if interaction.guild:
+        member = interaction.guild.get_member(interaction.user.id)
+        if member:
+            return member.display_name
+    return None
+
+
 def get_announce_channel_id() -> int:
     if TEST_MODE and TEST_ANNOUNCE_CHANNEL_ID:
         return TEST_ANNOUNCE_CHANNEL_ID
@@ -417,7 +426,7 @@ class WelcomeView(discord.ui.View):
         # Prüfen ob bereits Votes vorhanden – dann direkt Result-Ansicht zeigen
         try:
             existing_wishes = await asyncio.get_event_loop().run_in_executor(
-                None, sheets.read_votes, interaction.user
+                None, sheets.read_votes, interaction.user, _get_nickname(interaction)
             )
         except Exception:
             existing_wishes = {}
@@ -517,7 +526,7 @@ class ContinentSelect(discord.ui.Select):
         # Fehlende Wünsche aus Sheet nachladen (z.B. nach Bot-Neustart)
         try:
             fresh = await asyncio.get_event_loop().run_in_executor(
-                None, sheets.read_votes, interaction.user
+                None, sheets.read_votes, interaction.user, _get_nickname(interaction)
             )
             for k, v in fresh.items():
                 if k not in self.existing_wishes and k != self.wish_number:
@@ -741,7 +750,7 @@ class ResumeView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         try:
             current_wishes = await asyncio.get_event_loop().run_in_executor(
-                None, sheets.read_votes, interaction.user
+                None, sheets.read_votes, interaction.user, _get_nickname(interaction)
             )
         except Exception:
             current_wishes = {}
@@ -798,7 +807,7 @@ class ChangeWishButton(discord.ui.Button):
         # Frisch aus Sheet laden – Slot NICHT leeren, erst beim Speichern überschreiben
         try:
             current_wishes = await asyncio.get_event_loop().run_in_executor(
-                None, sheets.read_votes, interaction.user
+                None, sheets.read_votes, interaction.user, _get_nickname(interaction)
             )
         except Exception:
             current_wishes = dict(self.wishes)
@@ -868,7 +877,7 @@ class EditContinentSelect(discord.ui.Select):
         # Andere Wünsche laden – der eigene Slot wird nicht als "bereits gewählt" gezählt
         try:
             all_wishes = await asyncio.get_event_loop().run_in_executor(
-                None, sheets.read_votes, interaction.user
+                None, sheets.read_votes, interaction.user, _get_nickname(interaction)
             )
         except Exception:
             all_wishes = {}
@@ -921,7 +930,7 @@ class EditTrackSelect(discord.ui.Select):
         # Andere Wünsche laden – eigener Slot zählt nicht als bereits gewählt
         try:
             all_wishes = await asyncio.get_event_loop().run_in_executor(
-                None, sheets.read_votes, interaction.user
+                None, sheets.read_votes, interaction.user, _get_nickname(interaction)
             )
         except Exception:
             all_wishes = {}
@@ -999,7 +1008,7 @@ async def edit_save_wish(interaction: discord.Interaction, wish_number: int, new
     # Alle aktuellen Wünsche frisch laden
     try:
         current_wishes = await asyncio.get_event_loop().run_in_executor(
-            None, sheets.read_votes, interaction.user
+            None, sheets.read_votes, interaction.user, _get_nickname(interaction)
         )
     except Exception:
         current_wishes = {}

@@ -154,9 +154,10 @@ def write_votes(user: discord.User, wishes: dict, nickname: str | None = None):
         sh.batch_update(body)
 
 
-def read_votes(user: discord.User) -> dict:
+def read_votes(user: discord.User, nickname: str | None = None) -> dict:
     """Liest die aktuellen Votes eines Fahrers aus dem Sheet.
     Gibt {1: "Track1", 2: "Track2", 3: "Track3"} zurück, fehlende als "".
+    Sucht in dieser Reihenfolge: PSN-Name → Nickname → Discord-Name.
     """
     gc = get_client()
     sh = gc.open_by_key(GOOGLE_SHEETS_ID)
@@ -164,9 +165,22 @@ def read_votes(user: discord.User) -> dict:
 
     discord_name = str(user.name)
     psn_name = get_psn_name(discord_name)
-    display_name = psn_name if psn_name else discord_name
 
-    row_num = find_existing_vote_row(ws, display_name)
+    # Alle möglichen Namen der Reihe nach probieren
+    candidates = []
+    if psn_name:
+        candidates.append(psn_name)
+    if nickname and nickname not in candidates:
+        candidates.append(nickname)
+    if discord_name not in candidates:
+        candidates.append(discord_name)
+
+    row_num = None
+    for name in candidates:
+        row_num = find_existing_vote_row(ws, name)
+        if row_num:
+            break
+
     if not row_num:
         return {}
 
