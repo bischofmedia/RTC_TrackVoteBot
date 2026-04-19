@@ -633,7 +633,7 @@ class VariantSelect(discord.ui.Select):
             options.append(discord.SelectOption(
                 label=ALLE_VARIANTEN_LABEL,
                 value=ALLE_VARIANTEN_LABEL,
-                description="Alle Varianten dieser Strecke sind mir recht",
+                description="Jede Variante ist okay",
             ))
         options += [
             discord.SelectOption(label=v, value=v)
@@ -675,7 +675,17 @@ async def finalize_wish(interaction: discord.Interaction, wish_number: int, full
 
     existing_wishes[wish_number] = full_track
 
-    if wish_number < 3:
+    # Wenn alle 3 Wünsche gesetzt sind (auch bei Änderung) → direkt zur Ergebnisansicht
+    all_set = all(i in existing_wishes and existing_wishes[i] for i in range(1, 4))
+
+    if all_set:
+        view = ResultView(wishes=existing_wishes)
+        await interaction.edit_original_response(
+            content=TXT_RESULT_HINT,
+            embed=result_embed(existing_wishes),
+            view=view,
+        )
+    elif wish_number < 3:
         view = ContinentSelectView(
             wish_number=wish_number + 1,
             existing_wishes=existing_wishes,
