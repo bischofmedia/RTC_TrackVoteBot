@@ -124,7 +124,7 @@ def write_votes(user: discord.User, wishes: dict, nickname: str | None = None):
     if name_found:
         display_name = psn_name
     elif nickname:
-        display_name = nickname
+        display_name = nickname  # Fallback: Server-Nickname
     else:
         display_name = discord_name
 
@@ -241,3 +241,49 @@ def clear_wish(user: discord.User, wish_number: int):
     col = col_map.get(wish_number)
     if col:
         ws.update_cell(row_num, col, "")
+
+
+def write_rain(user: discord.User, rain: str):
+    """Schreibt die Regen-Präferenz (Ja/Nein) in Spalte G."""
+    gc = get_client()
+    sh = gc.open_by_key(GOOGLE_SHEETS_ID)
+    ws = sh.worksheet("TrackVoting")
+
+    discord_name = str(user.name)
+    psn_name = get_psn_name(discord_name)
+    display_name = psn_name if psn_name else discord_name
+
+    row_num = find_existing_vote_row(ws, display_name)
+    if row_num:
+        ws.update_cell(row_num, 7, rain)  # Spalte G
+
+
+def read_rain(user: discord.User, nickname: str | None = None) -> str | None:
+    """Liest die Regen-Präferenz aus Spalte G."""
+    gc = get_client()
+    sh = gc.open_by_key(GOOGLE_SHEETS_ID)
+    ws = sh.worksheet("TrackVoting")
+
+    discord_name = str(user.name)
+    psn_name = get_psn_name(discord_name)
+
+    candidates = []
+    if psn_name:
+        candidates.append(psn_name)
+    if nickname and nickname not in candidates:
+        candidates.append(nickname)
+    if discord_name not in candidates:
+        candidates.append(discord_name)
+
+    row_num = None
+    for name in candidates:
+        row_num = find_existing_vote_row(ws, name)
+        if row_num:
+            break
+
+    if not row_num:
+        return None
+
+    row = ws.row_values(row_num)
+    val = row[6].strip() if len(row) > 6 else ""  # Spalte G = Index 6
+    return val if val else None

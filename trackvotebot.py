@@ -433,13 +433,33 @@ class WelcomeView(discord.ui.View):
 
         if len(existing_wishes) == 3:
             # Alle drei Wünsche bereits abgegeben → direkt zur Ergebnisansicht
-            view = ResultView(wishes=existing_wishes)
-            await interaction.followup.send(
-                content=TXT_RESULT_HINT,
-                embed=result_embed(existing_wishes),
-                view=view,
-                ephemeral=True,
-            )
+            try:
+                rain = await asyncio.get_event_loop().run_in_executor(
+                    None, sheets.read_rain, interaction.user, _get_nickname(interaction)
+                )
+            except Exception:
+                rain = None
+            if not rain:
+                # Regen noch nicht beantwortet → Abfrage zeigen
+                view = RainSelectView(wishes=existing_wishes, user=interaction.user)
+                await interaction.followup.send(
+                    content=None,
+                    embed=discord.Embed(
+                        title="🌧️ Regenrennen",
+                        description="Möchtest du Regenrennen im Kalender haben?",
+                        color=discord.Color.blue(),
+                    ),
+                    view=view,
+                    ephemeral=True,
+                )
+            else:
+                view = ResultView(wishes=existing_wishes, rain=rain)
+                await interaction.followup.send(
+                    content=TXT_RESULT_HINT,
+                    embed=result_embed(existing_wishes, rain=rain),
+                    view=view,
+                    ephemeral=True,
+                )
         elif existing_wishes:
             # Teilweise abgestimmt → beim nächsten fehlenden Wunsch weitermachen
             next_wish = next(i for i in range(1, 4) if i not in existing_wishes)
@@ -468,7 +488,7 @@ def wish_embed(wish_number: int, selected: dict = None, show_footer: bool = True
     return embed
 
 
-def result_embed(wishes: dict) -> discord.Embed:
+def result_embed(wishes: dict, rain: str | None = None) -> discord.Embed:
     embed = discord.Embed(
         title="✅ Deine Streckenauswahl",
         description=TXT_RESULT_DESC,
@@ -476,6 +496,16 @@ def result_embed(wishes: dict) -> discord.Embed:
     )
     for i, track in wishes.items():
         embed.add_field(name=f"Wunsch {i}", value=track, inline=False)
+    if rain:
+        if rain == "Ja":
+            rain_label = "🌧️ Ja, Regenrennen erwünscht"
+        elif rain == "Nein":
+            rain_label = "☀️ Nein, keine Regenrennen"
+        else:
+            rain_label = "🤷 Egal"
+        embed.add_field(name="Regenrennen", value=rain_label, inline=False)
+    else:
+        embed.add_field(name="Regenrennen", value="❓ Noch nicht angegeben", inline=False)
     return embed
 
 
@@ -700,12 +730,31 @@ async def finalize_wish(interaction: discord.Interaction, wish_number: int, full
     all_set = all(i in existing_wishes and existing_wishes[i] for i in range(1, 4))
 
     if all_set:
-        view = ResultView(wishes=existing_wishes)
-        await interaction.edit_original_response(
-            content=TXT_RESULT_HINT,
-            embed=result_embed(existing_wishes),
-            view=view,
-        )
+        # Regen bereits gesetzt? Dann direkt Result, sonst Regen-Abfrage
+        try:
+            rain = await asyncio.get_event_loop().run_in_executor(
+                None, sheets.read_rain, interaction.user, _get_nickname(interaction)
+            )
+        except Exception:
+            rain = None
+        if rain:
+            view = ResultView(wishes=existing_wishes, rain=rain)
+            await interaction.edit_original_response(
+                content=TXT_RESULT_HINT,
+                embed=result_embed(existing_wishes, rain=rain),
+                view=view,
+            )
+        else:
+            view = RainSelectView(wishes=existing_wishes, user=interaction.user)
+            await interaction.edit_original_response(
+                content=None,
+                embed=discord.Embed(
+                    title="🌧️ Regenrennen",
+                    description="Möchtest du Regenrennen im Kalender haben?",
+                    color=discord.Color.blue(),
+                ),
+                view=view,
+            )
     elif wish_number < 3:
         view = ContinentSelectView(
             wish_number=wish_number + 1,
@@ -762,12 +811,30 @@ class ResumeView(discord.ui.View):
                 break
 
         if next_wish is None:
-            view = ResultView(wishes=current_wishes)
-            await interaction.edit_original_response(
-                content=TXT_RESULT_HINT,
-                embed=result_embed(current_wishes),
-                view=view,
-            )
+            try:
+                rain = await asyncio.get_event_loop().run_in_executor(
+                    None, sheets.read_rain, interaction.user, _get_nickname(interaction)
+                )
+            except Exception:
+                rain = None
+            if not rain:
+                view = RainSelectView(wishes=current_wishes, user=interaction.user)
+                await interaction.edit_original_response(
+                    content=None,
+                    embed=discord.Embed(
+                        title="🌧️ Regenrennen",
+                        description="Möchtest du Regenrennen im Kalender haben?",
+                        color=discord.Color.blue(),
+                    ),
+                    view=view,
+                )
+            else:
+                view = ResultView(wishes=current_wishes, rain=rain)
+                await interaction.edit_original_response(
+                    content=TXT_RESULT_HINT,
+                    embed=result_embed(current_wishes, rain=rain),
+                    view=view,
+                )
         else:
             view = ContinentSelectView(
                 wish_number=next_wish,
@@ -782,10 +849,11 @@ class ResumeView(discord.ui.View):
 
 
 class ResultView(discord.ui.View):
-    def __init__(self, wishes: dict):
+    def __init__(self, wishes: dict, rain: str | None = None):
         super().__init__(timeout=None)
         for i in range(1, 4):
             self.add_item(ChangeWishButton(wish_number=i, wishes=wishes))
+        self.add_item(ChangeRainButton(rain=rain))
 
 
 class ChangeWishButton(discord.ui.Button):
@@ -1035,14 +1103,141 @@ async def edit_save_wish(interaction: discord.Interaction, wish_number: int, new
     except Exception as e:
         print(f"[ERROR] edit_save_wish fehlgeschlagen: {e}")
 
-    # Ergebnisansicht mit allen 3 Wünschen zeigen
-    view = ResultView(wishes=current_wishes)
+    # Regen laden und Ergebnisansicht zeigen
+    try:
+        rain = await asyncio.get_event_loop().run_in_executor(
+            None, sheets.read_rain, interaction.user, _get_nickname(interaction)
+        )
+    except Exception:
+        rain = None
+    view = ResultView(wishes=current_wishes, rain=rain)
     await interaction.edit_original_response(
         content=TXT_RESULT_HINT,
-        embed=result_embed(current_wishes),
+        embed=result_embed(current_wishes, rain=rain),
         view=view,
     )
 
+
+
+
+# ──────────────────────────────────────────────
+# REGEN-ABFRAGE
+# ──────────────────────────────────────────────
+
+class RainSelectView(discord.ui.View):
+    def __init__(self, wishes: dict, user=None):
+        super().__init__(timeout=300)
+        self.wishes = wishes
+        self.user = user
+        self.add_item(RainYesButton(wishes))
+        self.add_item(RainNoButton(wishes))
+        self.add_item(RainEgalButton(wishes))
+
+    async def on_timeout(self):
+        msg = getattr(self, "message", None)
+        if msg:
+            try:
+                view = ResumeView(user=self.user)
+                await msg.edit(content=TXT_TIMEOUT_MSG, embed=None, view=view)
+            except Exception:
+                pass
+
+
+class RainYesButton(discord.ui.Button):
+    def __init__(self, wishes: dict):
+        self.wishes = wishes
+        super().__init__(
+            label="🌧️ Ja, Regenrennen erwünscht",
+            style=discord.ButtonStyle.primary,
+            custom_id="rain_yes",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        await _save_rain(interaction, self.wishes, "Ja")
+
+
+class RainNoButton(discord.ui.Button):
+    def __init__(self, wishes: dict):
+        self.wishes = wishes
+        super().__init__(
+            label="☀️ Nein, keine Regenrennen",
+            style=discord.ButtonStyle.secondary,
+            custom_id="rain_no",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        await _save_rain(interaction, self.wishes, "Nein")
+
+
+class RainEgalButton(discord.ui.Button):
+    def __init__(self, wishes: dict):
+        self.wishes = wishes
+        super().__init__(
+            label="🤷 Egal",
+            style=discord.ButtonStyle.secondary,
+            custom_id="rain_egal",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        await _save_rain(interaction, self.wishes, "Egal")
+
+
+async def _save_rain(interaction: discord.Interaction, wishes: dict, rain: str):
+    """Speichert die Regen-Präferenz und zeigt die Ergebnisansicht."""
+    try:
+        await asyncio.get_event_loop().run_in_executor(
+            None, sheets.write_rain, interaction.user, rain
+        )
+    except Exception as e:
+        print(f"[ERROR] write_rain fehlgeschlagen: {e}")
+
+    view = ResultView(wishes=wishes, rain=rain)
+    await interaction.edit_original_response(
+        content=TXT_RESULT_HINT,
+        embed=result_embed(wishes, rain=rain),
+        view=view,
+    )
+
+
+class ChangeRainButton(discord.ui.Button):
+    def __init__(self, rain: str | None = None):
+        self.rain = rain
+        if rain == "Ja":
+            label = "✏️ 🌧️ Regenrennen: Ja"
+        elif rain == "Nein":
+            label = "✏️ ☀️ Regenrennen: Nein"
+        elif rain == "Egal":
+            label = "✏️ 🤷 Regenrennen: Egal"
+        else:
+            label = "✏️ Regenrennen noch nicht angegeben"
+        super().__init__(
+            label=label[:80],
+            style=discord.ButtonStyle.secondary,
+            custom_id="change_rain",
+            row=3,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            current_wishes = await asyncio.get_event_loop().run_in_executor(
+                None, sheets.read_votes, interaction.user, _get_nickname(interaction)
+            )
+        except Exception:
+            current_wishes = {}
+        view = RainSelectView(wishes=current_wishes, user=interaction.user)
+        await interaction.edit_original_response(
+            content=None,
+            embed=discord.Embed(
+                title="🌧️ Regenrennen ändern",
+                description="Möchtest du Regenrennen im Kalender haben?",
+                color=discord.Color.blue(),
+            ),
+            view=view,
+        )
 
 if __name__ == "__main__":
     bot.run(DISCORD_TOKEN)
