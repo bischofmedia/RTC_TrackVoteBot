@@ -11,6 +11,7 @@ load_dotenv()
 
 import sheets
 import tracks
+import db
 
 DISCORD_TOKEN          = os.getenv("DISCORD_TOKEN")
 VOTING_CHANNEL_ID      = int(os.getenv("VOTING_CHANNEL_ID"))
@@ -162,6 +163,8 @@ async def post_welcome_message(guild: discord.Guild, end_date: date):
         return
     perms = channel.permissions_for(guild.me)
     print(f"[DEBUG] Channel: {channel.name}, send_messages: {perms.send_messages}, view_channel: {perms.view_channel}")
+    tracks.invalidate_cache()
+    print("[INFO] Trackliste-Cache geleert – wird beim nächsten Zugriff neu geladen.")
     await clear_voting_channel(guild)
     embed = get_welcome_embed(end_date)
     view = WelcomeView()
@@ -380,6 +383,7 @@ async def before_end_check():
 @bot.event
 async def on_ready():
     print(f"[INFO] {bot.user} ist online.")
+    db.check_connection_on_startup()
     if TEST_MODE:
         print(f"[INFO] ⚠️  TESTMODUS AKTIV – Zugriff nur für Rolle '{ORGA_ROLE_NAME}', Nachrichten in Test-Channel.")
     try:
