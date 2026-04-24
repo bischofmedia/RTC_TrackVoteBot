@@ -283,11 +283,56 @@ async def daily_check():
 @daily_check.before_loop
 async def before_daily_check():
     await bot.wait_until_ready()
+    # Sofort einmal ausführen (startup_check hat den Channel bereits gesetzt,
+    # aber daily_check muss auch den announcement_state für heute initialisieren)
     midnight_utc = local_midnight_utc()
     now_utc = datetime.now(pytz.utc)
     wait_seconds = (midnight_utc - now_utc).total_seconds()
     print(f"[INFO] Erster Daily-Check in {wait_seconds:.0f} Sekunden (Mitternacht {TIMEZONE}).")
     await asyncio.sleep(wait_seconds)
+
+
+@tasks.loop(count=1)
+async def immediate_daily_check():
+    """Führt einen einmaligen Check sofort beim Start aus um den State zu initialisieren."""
+    await asyncio.sleep(8)  # Nach startup_check
+    now = local_today()
+    announcement_state["last_check_date"] = now
+    announcement_state["started"] = False
+    announcement_state["reminded"] = False
+    announcement_state["ended"] = False
+    try:
+        start_date, end_date = sheets.get_voting_dates()
+    except Exception as e:
+        print(f"[ERROR] immediate_daily_check: {e}")
+        return
+    guild = bot.guilds[0] if bot.guilds else None
+    if not guild:
+        return
+    announce_channel = guild.get_channel(get_announce_channel_id())
+    mode_prefix = "🧪 **[TESTMODUS]** " if TEST_MODE else ""
+
+    if now == start_date:
+        print(f"[INFO] immediate_daily_check: Heute ist Start-Tag ({start_date}), starte Abstimmung.")
+        await set_channel_visibility(guild, True)
+        await post_welcome_message(guild, end_date)
+        if announce_channel:
+            await announce_channel.send(TXT_ANNOUNCE_START.format(
+                prefix=mode_prefix,
+                end_date=end_date.strftime("%d.%m.%Y"),
+                channel_id=VOTING_CHANNEL_ID,
+            ))
+        announcement_state["started"] = True
+    elif now == end_date:
+        print(f"[INFO] immediate_daily_check: Heute ist End-Tag ({end_date}), sende Erinnerung.")
+        if announce_channel and now != start_date:
+            await announce_channel.send(TXT_ANNOUNCE_REMINDER.format(
+                prefix=mode_prefix,
+                channel_id=VOTING_CHANNEL_ID,
+            ))
+        announcement_state["reminded"] = True
+    else:
+        print(f"[INFO] immediate_daily_check: Kein Event-Tag heute ({now}). Start: {start_date}, Ende: {end_date}.")
 
 
 # ──────────────────────────────────────────────
@@ -344,11 +389,39 @@ async def on_ready():
         print(f"[ERROR] Slash-Command Sync fehlgeschlagen: {e}")
 
     bot.add_view(WelcomeView())
-    daily_check.start()
-    end_check.start()
 
-    await asyncio.sleep(5)
-    await startup_check()
+    if not daily_check.is_running():
+        daily_check.start()
+        print("[INFO] daily_check gestartet.")
+    if not end_check.is_running():
+        end_check.start()
+        print("[INFO] end_check gestartet.")
+
+    try:
+        await asyncio.sleep(5)
+        await startup_check()
+    except Exception as e:
+        print(f"[ERROR] startup_check fehlgeschlagen: {e}")
+        import traceback
+        traceback.print_exc()
+
+    if not task_watchdog.is_running():
+        task_watchdog.start()
+        print("[INFO] task_watchdog gestartet.")
+    if not immediate_daily_check.is_running():
+        immediate_daily_check.start()
+        print("[INFO] immediate_daily_check gestartet.")
+
+
+@tasks.loop(minutes=30)
+async def task_watchdog():
+    """Prüft alle 30 Minuten ob die Tasks noch laufen und startet sie ggf. neu."""
+    if not daily_check.is_running():
+        print("[WARN] daily_check war nicht aktiv – wird neu gestartet.")
+        daily_check.start()
+    if not end_check.is_running():
+        print("[WARN] end_check war nicht aktiv – wird neu gestartet.")
+        end_check.start()
 
 
 async def startup_check():
