@@ -1266,7 +1266,7 @@ async def _save_rain(interaction: discord.Interaction, wishes: dict, rain: str):
     """Speichert die Regen-Präferenz und zeigt die Ergebnisansicht."""
     try:
         await asyncio.get_event_loop().run_in_executor(
-            None, sheets.write_rain, interaction.user, rain
+            None, sheets.write_rain, interaction.user, rain, _get_nickname(interaction)
         )
     except Exception as e:
         print(f"[ERROR] write_rain fehlgeschlagen: {e}")

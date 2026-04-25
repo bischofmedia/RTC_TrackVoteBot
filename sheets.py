@@ -243,19 +243,33 @@ def clear_wish(user: discord.User, wish_number: int):
         ws.update_cell(row_num, col, "")
 
 
-def write_rain(user: discord.User, rain: str):
-    """Schreibt die Regen-Präferenz (Ja/Nein) in Spalte G."""
+def write_rain(user: discord.User, rain: str, nickname: str | None = None):
+    """Schreibt die Regen-Präferenz in Spalte G."""
     gc = get_client()
     sh = gc.open_by_key(GOOGLE_SHEETS_ID)
     ws = sh.worksheet("TrackVoting")
 
     discord_name = str(user.name)
     psn_name = get_psn_name(discord_name)
-    display_name = psn_name if psn_name else discord_name
 
-    row_num = find_existing_vote_row(ws, display_name)
+    candidates = []
+    if psn_name:
+        candidates.append(psn_name)
+    if nickname and nickname not in candidates:
+        candidates.append(nickname)
+    if discord_name not in candidates:
+        candidates.append(discord_name)
+
+    row_num = None
+    for name in candidates:
+        row_num = find_existing_vote_row(ws, name)
+        if row_num:
+            break
+
     if row_num:
         ws.update_cell(row_num, 7, rain)  # Spalte G
+    else:
+        print(f"[WARN] write_rain: Keine Zeile für {discord_name} gefunden.")
 
 
 def read_rain(user: discord.User, nickname: str | None = None) -> str | None:
